@@ -1,0 +1,60 @@
+# ============================================================
+#  AgriGuard MVP — Full Requirements
+#  Install: pip install -r requirements.txt
+# ============================================================
+
+# ── Core Data ────────────────────────────────────────────────
+pandas==2.2.2
+numpy==1.26.4
+openpyxl==3.1.2                # Excel read/write support
+
+# ── Visualisation ────────────────────────────────────────────
+matplotlib==3.8.4
+seaborn==0.13.2
+plotly==5.22.0
+
+# ── Machine Learning ─────────────────────────────────────────
+scikit-learn==1.4.2
+xgboost==2.0.3                 # Optional: better boosting model
+prophet==1.1.5                 # Optional: time-series forecasting
+
+# ── Database ─────────────────────────────────────────────────
+mysql-connector-python==8.3.0
+SQLAlchemy==2.0.30             # ORM layer for FastAPI DB access
+pymysql==1.1.1                 # Alternate MySQL driver
+
+# ── Backend (FastAPI) ────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.7.1
+python-dotenv==1.0.1           # Load .env config files
+httpx==0.27.0                  # Async HTTP client (for API calls)
+
+# ── Jupyter / Notebook ───────────────────────────────────────
+jupyter==1.0.0
+notebook==7.2.0
+ipykernel==6.29.4
+ipywidgets==8.1.3              # Interactive widgets in notebooks
+nbformat==5.10.4
+
+# ── Data Validation ──────────────────────────────────────────
+cerberus==1.3.5
+marshmallow==3.21.3
+
+# ── Utilities ────────────────────────────────────────────────
+requests==2.32.2
+python-dateutil==2.9.0
+tqdm==4.66.4                   # Progress bars
+joblib==1.4.2                  # Model serialisation (used by sklearn)
+pickle5==0.0.12; python_version < "3.8"
+
+# ── SMS / USSD (Africa's Talking) ────────────────────────────
+africastalking==1.2.7
+
+# ── Weather API ──────────────────────────────────────────────
+pyowm==3.3.0                   # OpenWeatherMap wrapper
+
+# ── Testing ──────────────────────────────────────────────────
+pytest==8.2.2
+pytest-asyncio==0.23.7
+httpx==0.27.0                  # also used for FastAPI test client
