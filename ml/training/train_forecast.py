@@ -831,7 +831,7 @@ def main(crop_name: str = None, horizon: int = DEFAULT_HORIZON):
             )
         print(f"\n  Models saved to : {MODELS_DIR}/")
         print(f"  Metrics saved to: {EVALUATION_DIR}/")
-        print(f"\n✅ Ready! Start the API to serve forecasts:")
+        print(f"\n Ready! Start the API to serve forecasts:")
         print(f"   uvicorn app.main:app --reload\n")
 
     finally:
