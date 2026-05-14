@@ -1,51 +1,43 @@
-# docker-compose.yml
-version: '3.9'
+version: "3.9"
 
 services:
-  backend:
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    container_name: agriguard-backend
+  api:
+    build: .
     ports:
       - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./ml/saved_models:/app/ml/saved_models
     env_file:
       - .env
-    volumes:
-      - .:/app
     depends_on:
       - db
-    restart: unless-stopped
-    networks:
-      - agriguard-network
 
   db:
     image: mysql:8.0
-    container_name: agriguard-mysql
-    restart: unless-stopped
-    env_file:
-      - .env
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
     ports:
       - "3306:3306"
     volumes:
-      - mysql_data:/var/lib/mysql
-    networks:
-      - agriguard-network
+      - db_data:/var/lib/mysql
 
-  # Frontend (Uncomment when ready)
-  # frontend:
-  #   build: ./frontend
-  #   container_name: agriguard-frontend
-  #   ports:
-  #     - "3000:80"
-  #   depends_on:
-  #     - backend
-  #   networks:
-  #     - agriguard-network
+  streamlit:
+    build: .
+    command: streamlit run frontend/dashboard.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./ml/saved_models:/app/ml/saved_models
+    env_file:
+      - .env
+    depends_on:
+      - api
 
 volumes:
-  mysql_data:
-
-networks:
-  agriguard-network:
-    driver: bridge
+  db_data:
