@@ -1,0 +1,51 @@
+# docker-compose.yml
+version: '3.9'
+
+services:
+  backend:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: agriguard-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    depends_on:
+      - db
+    restart: unless-stopped
+    networks:
+      - agriguard-network
+
+  db:
+    image: mysql:8.0
+    container_name: agriguard-mysql
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - agriguard-network
+
+  # Frontend (Uncomment when ready)
+  # frontend:
+  #   build: ./frontend
+  #   container_name: agriguard-frontend
+  #   ports:
+  #     - "3000:80"
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - agriguard-network
+
+volumes:
+  mysql_data:
+
+networks:
+  agriguard-network:
+    driver: bridge
