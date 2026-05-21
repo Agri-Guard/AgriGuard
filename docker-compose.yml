@@ -1,24 +1,61 @@
 version: "3.9"
 
 services:
-  streamlit:
-    build: .
-    command: streamlit run frontend/dashboard.py --server.port 8501 --server.address 0.0.0.0
+
+  # =========================================================
+  # BACKEND (FastAPI - AgriGuard API)
+  # =========================================================
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+
+    container_name: agriguard-backend
+
     ports:
-      - "8501:8501"
+      - "8000:8000"
+
+    environment:
+      - ENV=development
+      - PYTHONUNBUFFERED=1
+
     volumes:
       - .:/app
+
+    command: >
+      uvicorn backend.app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+
+    restart: unless-stopped
+
+
+  # =========================================================
+  # FRONTEND (Streamlit Dashboard)
+  # =========================================================
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+
+    container_name: agriguard-frontend
+
+    ports:
+      - "8501:8501"
+
     environment:
-      - API_BASE_URL=http://backend:8000
+      - BACKEND_URL=http://backend:8000
+
     depends_on:
       - backend
 
-  backend:
-    build: .
-    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
-    ports:
-      - "8000:8000"
     volumes:
-      - .:/app
-    environment:
-      - DEBUG=True
+      - ./frontend:/app
+
+    command: >
+      streamlit run Home.py
+      --server.port 8501
+      --server.address 0.0.0.0
+
+    restart: unless-stopped
