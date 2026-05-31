@@ -611,6 +611,10 @@ with tab4:
 st.divider()
 st.caption(
     "AgriGuard • Agricultural Intelligence System • "
-    "Built by Keith Ndiema Kissa (2025/BCS/101/PS),Lukwago Mahad (2025/BCS/113/PS), Biyimbwa Elijah Ssimwogerere (2025/BCS/068/PS) Students at Mbarara University of Science and Technology • "
+    "Built by:" \
+    " Keith Ndiema Kissa (2025/BCS/101/PS)," \
+    "Lukwago Mahad (2025/BCS/113/PS), " \
+    "Biyimbwa Elijah Ssimwogerere (2025/BCS/068/PS) " \
+    "Students at Mbarara University of Science and Technology • "
     "For Ministry of ICT & National Guidance Prototype Showcase 2026"
 )
