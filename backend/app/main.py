@@ -29,6 +29,9 @@ from backend.app.schemas import (
 from backend.app.validator import validate_input
 from backend.app.model import predict_price, detect_fake_input
 
+from backend.app.routers.forecasts import router as forecasts_router
+from backend.app.routers.markets import router as markets_router
+
 
 # =============================================================================
 # APP INITIALIZATION
@@ -41,6 +44,9 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+app.include_router(forecasts_router)
+app.include_router(markets_router)
 
 
 # =============================================================================
