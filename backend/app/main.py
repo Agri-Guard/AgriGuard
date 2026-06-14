@@ -52,7 +52,6 @@ app.include_router(markets_router)
 # =============================================================================
 # CORS (MVP SAFE)
 # =============================================================================
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # MVP: avoid config failures
