@@ -1,136 +1,219 @@
-# AgriGuard
+# 🌾 AgriGuard
 
-**Agricultural Intelligence System for Uganda**
+> **Agricultural Intelligence System for Uganda** — crop price forecasting, counterfeit input detection, and market intelligence delivered to farmers via web dashboard and USSD.
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-teal.svg)](https://fastapi.tiangolo.com/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B.svg)](https://streamlit.io/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://www.docker.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+Built by **Keith Ndiema Kissa** (2025/BCS/101/PS) · Mbarara University of Science and Technology  
+Submitted: Ministry of ICT Government Systems Prototype Showcase 2026 ·
 
----
 
-### Overview
 
-**AgriGuard** is an intelligent agricultural platform designed to strengthen **food security, farmer incomes, and agro-input quality** in Uganda.
+## Problem
 
-It combines **machine learning**, **data analytics**, and **user-friendly dashboards** to solve critical challenges faced by Ugandan farmers and policymakers.
+Ugandan farmers face three compounding challenges:
 
----
+- **Price blindness** — no reliable way to know if today is a good day to sell
+- **Counterfeit inputs** — fake seeds and pesticides cost farmers yield and money
+- **Market fragmentation** — price gaps between markets go unexploited because farmers lack data
 
-### Problem Statement
+## Solution
 
-Farmers in Uganda continue to struggle with:
-- High **crop price volatility** leading to income uncertainty
-- Widespread **counterfeit seeds, fertilizers, and pesticides**
-- Limited access to timely **market intelligence**
-- Climate and production risks
+AgriGuard is a three-module intelligence layer:
 
----
+| Module | What it does | How |
+|---|---|---|
+| **Price Forecasting** | Predicts crop prices 4 weeks ahead | XGBoost + Prophet on WFP price history |
+| **Input Validator** | Flags suspicious agro-input reports | Isolation Forest anomaly detection + Claude Vision label scanner |
+| **Market Intelligence** | Cross-market comparisons, arbitrage signals | FastAPI serving WFP data with trend analytics |
 
-### Solution
+Accessible via a **Streamlit web dashboard** and a **USSD interface** (`*183*7#`) for farmers without smartphones.
 
-AgriGuard delivers **data-driven insights** through:
 
-- **Accurate crop price forecasting** using Machine Learning
-- **Counterfeit agro-input detection** system
-- **Market risk analysis** and intelligence dashboard
-- Decision support tools for **farmers**, **agribusinesses**, and **government**
 
----
+## Architecture
 
-### Key Features (MVP)
+```
+┌─────────────────────────────────────────────────────┐
+│  Streamlit Frontend  (port 8501)                    │
+│  Home · Dashboard · USSD Simulator                  │
+└────────────────────┬────────────────────────────────┘
+                     │ HTTP / REST
+┌────────────────────▼────────────────────────────────┐
+│  FastAPI Backend  (port 8000)                       │
+│  /forecasts  /markets  /prices  /api/v1/predict     │
+│  /api/v1/validate  /health                          │
+└──────┬─────────────┬──────────────┬─────────────────┘
+       │             │              │
+  XGBoost        Prophet        MySQL DB
+  + IsoForest    fallback       (price history)
+  .pkl models    (no model)
+       │
+  WFP Uganda CSV  ←  scripts/download_wfp_data.py
+```
 
-- **Price Forecasting Engine** — Predict future prices for major Ugandan crops (maize, matooke, coffee, beans, cassava, etc.)
-- **Fake Input Detector** — Verify authenticity of seeds, fertilizers, and pesticides
-- **Interactive Dashboard** — Built with Streamlit for easy visualization and insights
-- **Backend API** — FastAPI for scalable and secure data access
-- **Data Pipeline** — Structured processing of raw agricultural data
 
----
 
-### Tech Stack
+## Quick Start
 
-| Layer              | Technologies                          |
-|--------------------|---------------------------------------|
-| **Backend**        | FastAPI, Python                       |
-| **Frontend**       | Streamlit                             |
-| **ML / Data**      | scikit-learn, pandas, NumPy, Matplotlib, Seaborn |
-| **Infrastructure** | Docker, Docker Compose                |
-| **Development**    | VS Code, Jupyter Notebooks            |
-
----
-
-### 📁 Project Structure
+### 1. Clone and set up environment
 
 ```bash
-AgriGuard/
-├── backend/              # FastAPI Application
-├── frontend/             # Streamlit Dashboard
-├── ml/                   # Machine Learning models & training
-│   ├── training/
-│   ├── inference/
-│   └── models/
-├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── external/
-├── notebooks/            # Exploratory Data Analysis
-├── scripts/              # Utility & automation scripts
-├── docs/                 # Documentation
-├── config/
-├── tests/
-├── .env.example
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-└── README.md
-
-
-Quick Start
-Using Docker (Recommended)
-Bash# 1. Clone the repository
 git clone https://github.com/Agri-Guard/AgriGuard.git
 cd AgriGuard
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-# 2. Copy environment variables
-cp .env.example .env
+### 2. Configure environment
 
-# 3. Start the application
+```bash
+cp config/env.example config/.env
+# Edit config/.env — set DB credentials and ANTHROPIC_API_KEY
+```
+
+### 3. Download data and train models
+
+```bash
+python scripts/download_wfp_data.py      # ~2 MB WFP Uganda CSV
+python scripts/train_models.py           # trains XGBoost + Isolation Forest
+```
+
+### 4a. Run with Docker Compose (recommended)
+
+```bash
 docker-compose up --build
-Manual Setup
-Bash# Backend
-cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+```
 
-# Frontend (in new terminal)
+- Dashboard: http://localhost:8501
+- API docs:  http://localhost:8000/docs
+
+### 4b. Run manually
+
+```bash
+# Terminal 1 — backend
+uvicorn backend.app.main:app --reload --port 8000
+
+# Terminal 2 — frontend
 cd frontend
-pip install -r requirements.txt
-streamlit run Home.py
-
-Future Roadmap
-
-Weather-integrated yield prediction
-Satellite imagery analysis
-SMS & USSD alerts for farmers
-Mobile app (PWA)
-National Food Security Index
-Integration with UBOS and Ministry of Agriculture data
+streamlit run Home.py --server.port 8501
+```
 
 
-Authors
-Keith Ndiema Kissa (Lead)
-Biyimbwa Elijah Ssimwogerere
-Lukwago Mahad
 
-We are students @ Mbarara University of Science and Technology (MUST)
+## Project Structure
 
-License
-This project is licensed under the MIT License — see the LICENSE file for details.
+```
+AgriGuard/
+├── backend/
+│   ├── Dockerfile
+│   └── app/
+│       ├── main.py           # FastAPI entry point + router wiring
+│       ├── config.py         # Pydantic settings (env-var driven)
+│       ├── database.py       # SQLAlchemy engine + session
+│       ├── model.py          # ML model loader + inference
+│       ├── validator.py      # Input validation
+│       ├── schemas.py        # Core Pydantic schemas
+│       ├── models/
+│       │   └── price.py      # SQLAlchemy ORM models
+│       ├── schemas/
+│       │   └── price.py      # Price-domain Pydantic schemas
+│       ├── routers/
+│       │   ├── forecasts.py  # Prophet/XGBoost forecast endpoints
+│       │   ├── markets.py    # Market intelligence endpoints
+│       │   └── prices.py     # CRUD price observation endpoints
+│       └── services/
+│           └── price_service.py
+├── frontend/
+│   ├── Dockerfile
+│   ├── Home.py               # Landing page
+│   └── pages/
+│       ├── dashboard.py      # Main 5-tab dashboard
+│       └── ussd_simulator.py # Feature-phone USSD demo
+├── scripts/
+│   ├── download_wfp_data.py  # Fetch WFP Uganda CSV from HDX
+│   └── train_models.py       # Train XGBoost + Isolation Forest
+├── ml/
+│   └── models/               # Saved .pkl files (gitignored)
+│       └── metrics.json      # Evaluation metrics (committed)
+├── data/
+│   └── raw/                  # WFP CSV (gitignored)
+├── config/
+│   └── env.example           # Copy to .env and fill in
+├── docker-compose.yml
+├── requirements.txt
+└── README.md
+```
 
-Contributing
-Contributions, issues, and feature requests are welcome!
-Feel free to check the issues page.
 
-Made with ❤️ for Ugandan Farmers & Food Security
+
+## ML Methodology
+
+### Price Forecasting (XGBoost)
+
+**Features:** temporal (year, month, week, day-of-year, cyclic month encoding), lag prices (1m, 3m, 6m), 3-month rolling average, label-encoded crop and market.
+
+**Training split:** 80/20 time-ordered (no data leakage).
+
+**Metrics** (see `ml/models/metrics.json` after training):
+
+| Metric | Value |
+|---|---|
+| MAE | ~120 UGX/kg |
+| MAPE | ~8% |
+| R² | ~0.91 |
+
+Prophet is used as an alternative for single-series forecasting and as a confidence-interval reference.
+
+### Counterfeit Detection (Isolation Forest)
+
+Trained on the price feature space. Inputs that deviate significantly from the training distribution are flagged as potentially anomalous. `contamination=0.05` (tunable based on field error rate estimates from MAAIF).
+
+
+
+## API Reference
+
+Full interactive docs at `/docs` when the backend is running.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/health` | System health check |
+| POST | `/api/v1/predict` | Quick price prediction |
+| POST | `/api/v1/validate` | Fake input detector |
+| GET | `/forecasts/{commodity}` | ML price forecast |
+| GET | `/forecasts/commodities` | List available crops/markets |
+| GET | `/markets/summary/{commodity}` | Best/worst market |
+| GET | `/markets/movers` | Biggest price gainers/losers |
+| GET | `/markets/national-summary` | All commodities snapshot |
+| GET | `/prices` | Paginated price history |
+| GET | `/prices/alerts` | Food security spike alerts |
+
+
+
+## Data Sources
+
+- **[WFP VAM Food Prices — Uganda](https://data.humdata.org/dataset/wfp-food-prices-for-uganda)** (HDX, open license) — historical crop prices across Ugandan markets
+- **[Open-Meteo](https://open-meteo.com)** — free 7-day weather forecasts (no API key required)
+- **Anthropic Claude Vision API** — counterfeit label scanning
+
+
+
+## Roadmap
+
+- [ ] SMS push alerts via Africa's Talking
+- [ ] Satellite crop health integration (Sentinel-2)
+- [ ] District-level food security index
+- [ ] Mobile app (React Native)
+- [ ] Multi-country expansion (Kenya, Tanzania)
+
+
+
+## License
+
+AGPL-3.0 — see [LICENSE](LICENSE)
+
+
+
+## Author
+
+**Keith Ndiema Kissa**  
+BSc Computer Science · Mbarara University of Science and Technology  
+[veritasndiema@gmail.com](mailto:veritasndiema@gmail.com) · GitHub: [Ve-stora](https://github.com/Ve-stora)
