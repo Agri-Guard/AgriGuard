@@ -403,7 +403,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # ══════════════════════════════════════════════
 # TAB 1 — PRICE FORECAST
 # ══════════════════════════════════════════════
-with tab1:
+with tab1:ko
     st.subheader(f"Price Forecast: **{crop}** in **{market}**")
 
     col_btn, col_info = st.columns([1, 3])
