@@ -890,6 +890,6 @@ with tab5:
 st.divider()
 st.caption(
     "AgriGuard · Agricultural Intelligence for Uganda · "
-    "Built by Keith Ndiema Kissa · MUST 2026 · Ministry of ICT Showcase · "
+    "Built by Keith Ndiema Kissa · Mbarara University of Science and Technology, 2026"
     "Data: Open-Meteo (weather), AgriGuard FastAPI backend (prices)"
 )

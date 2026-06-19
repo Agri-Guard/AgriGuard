@@ -298,5 +298,5 @@ This works on a **UGX 15,000 Nokia** with no data plan.
 st.divider()
 st.caption(
     "AgriGuard USSD · Powered by MTN Uganda & Airtel Uganda · "
-    "Built by Keith Ndiema Kissa · MUST 2026"
+    "Built by Keith Ndiema Kissa · Mbarara University of Science and Technology, 2026"
 )
