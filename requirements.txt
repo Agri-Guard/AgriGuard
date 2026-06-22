@@ -1,40 +1,38 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# AgriGuard Python dependencies
-# Install: pip install -r requirements.txt
-# Python >= 3.10 required
-# ─────────────────────────────────────────────────────────────────────────────
+# API
+fastapi==0.136.1
+uvicorn==0.46.0
+python-multipart==0.0.28
+python-dotenv==1.2.2
+pydantic==2.13.4
+pydantic-settings==2.14.1
 
-# ── Web framework ─────────────────────────────────────────────────────────────
-fastapi>=0.111.0,<1.0
-uvicorn[standard]>=0.29.0,<1.0
-python-multipart>=0.0.9        # for form/file uploads
+# Database
+sqlalchemy==2.0.49
+alembic==1.18.4
+aiomysql==0.3.2
+PyMySQL==1.1.3
 
-# ── Data validation ───────────────────────────────────────────────────────────
-pydantic>=2.0.0,<3.0
-pydantic-settings>=2.0.0
+# ML & Data
+pandas==2.3.3
+numpy==2.4.4
+scikit-learn==1.8.0
+prophet==1.3.0
+xgboost==3.2.0
+lightgbm==4.6.0
+joblib==1.5.3
+scipy==1.17.1
 
-# ── ML / data science ─────────────────────────────────────────────────────────
-numpy>=1.26.0,<2.0
-pandas>=2.2.0,<3.0
-scikit-learn>=1.4.0,<2.0
-xgboost>=2.0.0                 # price forecast model; falls back to sklearn if absent
+# Dashboard
+streamlit==1.57.0
+plotly==6.7.0
+matplotlib==3.10.9
+seaborn==0.13.2
 
-# ── HTTP client (data download + frontend → backend calls) ───────────────────
-requests>=2.31.0,<3.0
+# Auth & Security
+python-jose==3.5.0
+bcrypt==5.0.0
+passlib==1.7.4
 
-# ── Frontend ──────────────────────────────────────────────────────────────────
-streamlit>=1.35.0
-plotly>=5.22.0
-
-# ── Database (optional — SQLite works out of the box) ─────────────────────────
-sqlalchemy>=2.0.0,<3.0
-pymysql>=1.1.0                 # only needed for MySQL; comment out for SQLite-only
-python-dotenv>=1.0.0
-
-# ── Image analysis (optional — enables Anthropic vision endpoint) ─────────────
-anthropic>=0.28.0              # only used if ANTHROPIC_API_KEY is set
-Pillow>=10.3.0
-
-# ── Dev / testing ─────────────────────────────────────────────────────────────
-pytest>=8.0.0
-httpx>=0.27.0                  # async test client for FastAPI
+# HTTP
+httpx==0.28.1
+requests==2.34.0
