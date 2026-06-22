@@ -56,3 +56,4 @@ Thumbs.db
 *.log
 *.sqlite
 agriguard_dev.db
+backend/.env
