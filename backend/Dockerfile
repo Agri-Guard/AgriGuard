@@ -1,26 +1,34 @@
-FROM python:3.11-slim
+# ─────────────────────────────────────────────────────────────────────────────
+# AgriGuard backend Dockerfile
+# ─────────────────────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 
-# System deps needed by Prophet (Stan compiler) and LightGBM
+# system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+    curl \
     gcc \
     g++ \
-    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies first (layer-cache friendly)
+# ── deps layer (cached unless requirements.txt changes) ──────────────────────
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-# Copy full project
-COPY . .
+# ── source ────────────────────────────────────────────────────────────────────
+COPY backend/  ./backend/
+COPY scripts/  ./scripts/
+COPY config/   ./config/
 
+# create empty dirs so volumes mount cleanly
+RUN mkdir -p data/raw ml/models
+
+# default: run the API (override in docker-compose for trainer)
 EXPOSE 8000
-
-# Run from project root so `backend.app.main` resolves correctly
-CMD ["uvicorn", "backend.app.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--reload"]
+CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
