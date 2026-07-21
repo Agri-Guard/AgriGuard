@@ -21,6 +21,8 @@ for env_path in [ROOT / "config" / ".env", ROOT / "backend" / ".env"]:
 
 class Settings:
     # app
+    app_name:   str  = "AgriGuard"
+    app_version: str = "0.1.0"
     app_env:    str  = os.getenv("APP_ENV",    "development")
     debug:      bool = os.getenv("DEBUG",      "false").lower() == "true"
     secret_key: str  = os.getenv("SECRET_KEY", "dev-secret-key")
