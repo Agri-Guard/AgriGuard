@@ -33,7 +33,7 @@ from xgboost import XGBRegressor
 
 warnings.filterwarnings("ignore")
 
-DEFAULT_DATA  = Path("data/raw/wfp_food_prices_uganda.csv")
+DEFAULT_DATA  = Path("data/raw/wfp_food_prices_uga.csv")
 DEFAULT_OUTDIR = Path("ml/models")
 
 
