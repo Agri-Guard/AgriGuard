@@ -15,6 +15,7 @@ This page demonstrates:
 For Ministry of ICT Showcase: run this alongside the dashboard.
 """
 
+import os
 import streamlit as st
 import requests
 from datetime import datetime
@@ -25,7 +26,7 @@ st.set_page_config(
     layout="centered",
 )
 
-BASE_URL = st.secrets.get("BACKEND_URL", "http://localhost:8000")
+BASE_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 # ─────────────────────────────────────────────
 # STYLE — mimics a Nokia feature-phone screen
