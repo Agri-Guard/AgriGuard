@@ -1,6 +1,6 @@
 """
 AgriGuard — Price Forecast page
-Calls /api/v1/forecasts/{commodity}/{market}?horizon=N
+Calls GET /forecasts/{commodity}?market=...&horizon=... (horizon in days, 1-90)
 """
 
 import os
@@ -8,7 +8,6 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from datetime import datetime
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
 
@@ -18,7 +17,7 @@ st.set_page_config(
     layout="wide",
 )
 st.title("📈 Crop Price Forecast")
-st.caption("ML-powered price predictions up to 24 months ahead (UGX/kg)")
+st.caption("ML-powered price predictions up to 90 days ahead")
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -36,60 +35,50 @@ def api_get(path: str, params: dict = None):
 
 
 @st.cache_data(ttl=300)
-def get_commodities():
-    data = api_get("/api/v1/forecasts/commodities")
-    return data["commodities"] if data else [
-        "Maize", "Beans", "Rice", "Cassava",
-        "Sorghum", "Sweet Potato", "Groundnuts", "Millet",
-    ]
-
-
-@st.cache_data(ttl=300)
-def get_markets():
-    data = api_get("/api/v1/forecasts/markets")
-    return data["markets"] if data else [
-        "Kampala", "Gulu", "Mbarara", "Jinja",
-        "Mbale", "Lira", "Arua", "Fort Portal",
-    ]
+def get_commodities_and_markets():
+    data = api_get("/forecasts/commodities")
+    if data:
+        return data["commodities"], data["markets"]
+    return (
+        ["Maize", "Beans", "Rice", "Cassava", "Sorghum", "Sweet Potato", "Groundnuts", "Millet"],
+        ["Kampala", "Gulu", "Mbarara", "Jinja", "Mbale", "Lira", "Arua", "Fort Portal"],
+    )
 
 
 @st.cache_data(ttl=120)
 def get_forecast(commodity: str, market: str, horizon: int):
     return api_get(
-        f"/api/v1/forecasts/{commodity}/{market}",
-        params={"horizon": horizon},
+        f"/forecasts/{commodity}",
+        params={"market": market, "horizon": horizon},
     )
 
 
 @st.cache_data(ttl=120)
-def get_history(commodity: str, market: str):
+def get_history(commodity: str, market: str, days: int):
     return api_get(
-        f"/api/v1/markets/history/{commodity}/{market}",
-        params={"months": 24},
+        f"/forecasts/history/{commodity}",
+        params={"market": market, "days": days},
     )
 
 
 # ── sidebar controls ───────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Forecast Settings")
-    commodities = get_commodities()
-    markets     = get_markets()
+    commodities, markets = get_commodities_and_markets()
 
     commodity = st.selectbox("Commodity", commodities)
     market    = st.selectbox("Market",    markets)
-    horizon   = st.slider("Horizon (months)", 1, 24, 6)
+    horizon   = st.slider("Horizon (days)", 1, 90, 14)
     run       = st.button("Run Forecast", type="primary", use_container_width=True)
 
     st.divider()
-    st.caption("Powered by XGBoost trained on WFP Uganda market data.")
+    st.caption("Powered by Prophet, with an XGBoost residual correction on top.")
 
 
 # ── main area ──────────────────────────────────────────────────────────────
 if run or True:   # auto-run on page load
-    col_info, col_metric = st.columns([3, 1])
-
     forecast_data = get_forecast(commodity, market, horizon)
-    history_data  = get_history(commodity, market)
+    history_data  = get_history(commodity, market, days=365)
 
     if forecast_data is None:
         st.warning(
@@ -98,37 +87,40 @@ if run or True:   # auto-run on page load
         )
         st.stop()
 
-    forecasts = forecast_data.get("forecasts", [])
-    if not forecasts:
+    forecast = forecast_data.get("forecast", [])
+    if not forecast:
         st.error("No forecast data returned. Check that models are trained.")
         st.stop()
 
-    df_fc = pd.DataFrame(forecasts)
-    df_fc["date"] = pd.to_datetime(
-        df_fc["year"].astype(str) + "-" + df_fc["month"].astype(str).str.zfill(2) + "-01"
-    )
+    df_fc = pd.DataFrame(forecast)
+    df_fc["date"] = pd.to_datetime(df_fc["date"])
 
     # ── metrics row ────────────────────────────────────────────────────────
-    first_pred = df_fc["predicted_price_ugx"].iloc[0]
-    last_pred  = df_fc["predicted_price_ugx"].iloc[-1]
-    pct_change = (last_pred - first_pred) / (first_pred + 1e-9) * 100
-    model_r2   = forecast_data.get("model_r2")
+    first_pred  = df_fc["predicted_price"].iloc[0]
+    last_pred   = df_fc["predicted_price"].iloc[-1]
+    pct_change  = forecast_data.get("pct_change", 0.0)
+    trend       = forecast_data.get("trend", "stable")
+    unit        = forecast_data.get("unit", "kg")
+    currency    = forecast_data.get("currency", "UGX")
+    model_used  = forecast_data.get("model_used", "N/A")
+    alert       = forecast_data.get("alert")
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Next Month",   f"UGX {first_pred:,.0f}")
-    m2.metric(f"Month {horizon}", f"UGX {last_pred:,.0f}",
-              delta=f"{pct_change:+.1f}%")
-    m3.metric("Horizon",      f"{horizon} months")
-    m4.metric("Model R²",     f"{model_r2:.3f}" if model_r2 else "N/A")
+    m1.metric("Tomorrow",             f"{currency} {first_pred:,.0f}/{unit}")
+    m2.metric(f"Day {horizon}",       f"{currency} {last_pred:,.0f}/{unit}", delta=f"{pct_change:+.1f}%")
+    m3.metric("Trend",                trend.capitalize())
+    m4.metric("Model",                model_used)
+
+    if alert:
+        st.warning(f"⚠️ {alert}")
 
     st.divider()
 
     # ── combined history + forecast chart ─────────────────────────────────
     fig = go.Figure()
 
-    # historical line
-    if history_data and history_data.get("data"):
-        df_hist = pd.DataFrame(history_data["data"])
+    if history_data and history_data.get("history"):
+        df_hist = pd.DataFrame(history_data["history"])
         df_hist["date"] = pd.to_datetime(df_hist["date"])
         fig.add_trace(go.Scatter(
             x=df_hist["date"], y=df_hist["price"],
@@ -140,7 +132,7 @@ if run or True:   # auto-run on page load
     # confidence band
     fig.add_trace(go.Scatter(
         x=pd.concat([df_fc["date"], df_fc["date"][::-1]]),
-        y=pd.concat([df_fc["upper_bound_ugx"], df_fc["lower_bound_ugx"][::-1]]),
+        y=pd.concat([df_fc["upper_bound"], df_fc["lower_bound"][::-1]]),
         fill="toself",
         fillcolor="rgba(46,204,113,0.15)",
         line=dict(color="rgba(0,0,0,0)"),
@@ -150,7 +142,7 @@ if run or True:   # auto-run on page load
 
     # forecast line
     fig.add_trace(go.Scatter(
-        x=df_fc["date"], y=df_fc["predicted_price_ugx"],
+        x=df_fc["date"], y=df_fc["predicted_price"],
         name="Forecast",
         mode="lines+markers",
         line=dict(color="#2ecc71", width=2.5, dash="dot"),
@@ -160,7 +152,7 @@ if run or True:   # auto-run on page load
     fig.update_layout(
         title=f"{commodity} — {market}",
         xaxis_title="Date",
-        yaxis_title="Price (UGX/kg)",
+        yaxis_title=f"Price ({currency}/{unit})",
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left"),
         height=430,
@@ -170,15 +162,14 @@ if run or True:   # auto-run on page load
 
     # ── forecast table ─────────────────────────────────────────────────────
     with st.expander("📋 Forecast Data Table"):
-        display_df = df_fc[["date", "predicted_price_ugx", "lower_bound_ugx", "upper_bound_ugx"]].copy()
-        display_df.columns = ["Month", "Forecast (UGX)", "Lower Bound", "Upper Bound"]
-        display_df["Month"] = display_df["Month"].dt.strftime("%b %Y")
+        display_df = df_fc[["date", "predicted_price", "lower_bound", "upper_bound", "confidence"]].copy()
+        display_df.columns = ["Date", f"Forecast ({currency})", "Lower Bound", "Upper Bound", "Confidence"]
+        display_df["Date"] = display_df["Date"].dt.strftime("%d %b %Y")
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
     # ── interpretation ─────────────────────────────────────────────────────
-    direction = "rise" if pct_change > 2 else ("fall" if pct_change < -2 else "remain stable")
     st.info(
-        f"**Outlook:** {commodity} prices in {market} are forecast to **{direction}** "
-        f"by **{abs(pct_change):.1f}%** over the next {horizon} months. "
-        f"Confidence band shows ±10% range."
+        f"**Outlook:** {commodity} prices in {market} are forecast to **{trend}** "
+        f"by **{abs(pct_change):.1f}%** over the next {horizon} days. "
+        f"Model used: `{model_used}`, trained on {forecast_data.get('observations_used', 'N/A')} observations."
     )
