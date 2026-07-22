@@ -879,7 +879,8 @@ with tab5:
     # ── Raw data expander
     with st.expander("📋 Raw Weather Data"):
         st.dataframe(
-            weather_df.drop(columns=["_risk_level"]).style.apply(weather_row_style, axis=1),
+            weather_df.style.apply(weather_row_style, axis=1)
+                            .hide(axis="columns", subset=["_risk_level"]),
             use_container_width=True,
             hide_index=True,
         )
