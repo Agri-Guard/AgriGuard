@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# AgriGuard Easy Runner - No repeated pip installs!
+# AgriGuard Easy Runner - No repeated pip installs! No Docker!
 
 set -e
 
-echo "🚀 AgriGuard Launcher"
+echo "🚀 AgriGuard Launcher (native, no Docker)"
 
 # Pick python3 if available, fall back to python
 PYTHON_BIN="python3"
@@ -58,15 +58,42 @@ echo "✅ Ready!"
 echo "Dashboard → http://localhost:8501"
 echo "API docs  → http://localhost:8000/docs"
 
-# Launch — prefer v2 'docker compose', fall back to v1 'docker-compose'
-if docker compose version >/dev/null 2>&1; then
-    echo "🐳 Starting with Docker Compose (v2)..."
-    docker compose up --build
-elif command -v docker-compose >/dev/null 2>&1; then
-    echo "🐳 Starting with Docker Compose (v1)..."
-    docker-compose up --build
-else
-    echo "💡 Docker not found. Start manually in two terminals:"
-    echo "   Terminal 1: uvicorn backend.app.main:app --reload --port 8000"
-    echo "   Terminal 2: cd frontend && streamlit run Home.py --server.port 8501"
-fi
+BACKEND_PID=""
+FRONTEND_PID=""
+
+cleanup() {
+    echo ""
+    echo "🛑 Shutting down..."
+    [ -n "$BACKEND_PID" ] && kill "$BACKEND_PID" 2>/dev/null
+    [ -n "$FRONTEND_PID" ] && kill "$FRONTEND_PID" 2>/dev/null
+    wait 2>/dev/null
+}
+trap cleanup EXIT INT TERM
+
+echo "🐍 Starting backend (uvicorn)..."
+uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload &
+BACKEND_PID=$!
+
+# Wait for backend health before starting frontend
+echo "⏳ Waiting for backend to become healthy..."
+for i in $(seq 1 30); do
+    if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+        echo "✅ Backend is up."
+        break
+    fi
+    if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+        echo "❌ Backend process died. Check the logs above."
+        exit 1
+    fi
+    sleep 1
+done
+
+echo "📊 Starting frontend (streamlit)..."
+(cd frontend && streamlit run Home.py \
+    --server.port 8501 \
+    --server.address 0.0.0.0 \
+    --server.headless true) &
+FRONTEND_PID=$!
+
+# Wait on both — if either exits, cleanup() takes down the other via trap
+wait -n "$BACKEND_PID" "$FRONTEND_PID"
