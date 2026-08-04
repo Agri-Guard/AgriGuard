@@ -2,8 +2,7 @@
 
 > **Agricultural Intelligence System for Uganda** — crop price forecasting, counterfeit input detection, and market intelligence delivered to farmers via web dashboard and USSD.
 
-Built by **Keith Ndiema Kissa** (2025/BCS/101/PS) · Mbarara University of Science and Technology  
-Submitted: Ministry of ICT Government Systems Prototype Showcase 2026 ·
+Built by **Keith Ndiema Kissa** (2025/BCS/101/PS) · Mbarara University of Science and Technology • 2026
 
 
 
