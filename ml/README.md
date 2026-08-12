@@ -26,7 +26,7 @@ ml/
 ## Usage
 
 ```bash
-# from repo root, after scripts/download_wfp_data.py has produced data/raw/wfp_uganda_prices.csv
+# from repo root, after scripts/download_wfp_data.py has produced data/raw/wfp_food_prices_uga.csv
 python -m ml.training.train_price_model
 python -m ml.training.train_anomaly_model
 python -m ml.training.evaluate --model ml/models/price_forecast_xgb.pkl
