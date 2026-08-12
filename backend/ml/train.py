@@ -11,7 +11,7 @@ that produces them.
 Run from repo root:
     python -m backend.ml.train
 
-Expects data/raw/wfp_uganda_prices.csv to already exist -- run
+Expects data/raw/wfp_food_prices_uga.csv to already exist -- run
 scripts/download_wfp_data.py first if it doesn't.
 """
 import json
