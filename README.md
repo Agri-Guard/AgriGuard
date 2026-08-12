@@ -1,14 +1,10 @@
 # 🌾 AgriGuard
 
-> **Agricultural intelligence for Uganda** — crop price forecasting and
-> counterfeit-input detection for smallholder farmers, delivered via a
-> Streamlit dashboard and a USSD interface for feature phones.
+> **Agricultural intelligence for Uganda** — crop price conveyance, crop price forecasting (using quant strategies and sentiment analysis), weather forecast conveyance, crop diseases detection, crop pests detection for all farmers, delivered via a mobile app (both Android and iOS), a desktop app (Windows and Linux) and a USSD interface for feature phones.
 
 Built by **Keith Ndiema Kissa** (2025/BCS/101/PS) · Mbarara University of
-Science and Technology · Selected for Uganda's Ministry of ICT Government
-Systems Prototype Showcase, June 2026.
+Science and Technology, Uganda
 
----
 
 ## Status at a glance
 
@@ -21,7 +17,6 @@ Systems Prototype Showcase, June 2026.
 | Weather data collection | **Working as a standalone script**, not yet joined into the forecasting features. See `data/README.md`. |
 | `quant/` package | **Scaffold only** — empty files, shared discipline with [Vestora](https://github.com/Ve-stora/vestora)'s quant module, not yet implemented. |
 | `mobile/` (Flutter), `desktop/` (Tauri), `shared/api-client/` | **Scaffold only** — directory structure and dependency manifests exist; no implementation yet. |
-| `fixed_files/` | **Legacy.** An earlier patch-delivery snapshot of a subset of files, now superseded by the real ones in `backend/`, `config/`, `scripts/`. Kept for reference; safe to delete once diffed. |
 
 This section exists so the rest of the README doesn't have to hedge every
 claim — anything described below as working, is working; anything listed
@@ -29,23 +24,25 @@ above as scaffold/legacy is described that way in its own section too.
 
 ## Problem
 
-Ugandan farmers face three compounding challenges:
+Ugandan farmers face some (if not all) of these compounding challenges:
 
 - **Price blindness** — no reliable way to know if today is a good day to sell
-- **Counterfeit inputs** — fake seeds and pesticides cost farmers yield and money
 - **Market fragmentation** — price gaps between markets go unexploited because farmers lack data
+- **Unpredictable weather** - made worse by information gaps
+- **Crop pests and diseases** - some of which are not easily identifiable
+
 
 ## Solution
 
 | Module | What it does | How |
 |---|---|---|
 | **Price Forecasting** | Predicts crop prices weeks ahead, per market | XGBoost on WFP price history, Prophet as an alternative single-series forecaster |
-| **Input Validator** | Flags suspicious agro-input reports | Isolation Forest anomaly detection, optional Claude Vision label scan |
 | **Market Intelligence** | Cross-market comparisons, biggest movers, national summary | FastAPI serving the WFP dataset with trend analytics |
+| **Weather information conveyance** | Current and future weather patterns for atleast 10 years into the past and 14 days into the future |via the app |
 
-Accessible via a **Streamlit web dashboard** and a **USSD interface**
+Accessible via an **app** for internet-enabled devices and a **USSD interface** for feature phones
 (`/ussd/simulate` locally; a real short-code requires an Africa's Talking
-account — see `config/README.md`) for farmers without smartphones.
+
 
 ## Architecture
 
