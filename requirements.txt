@@ -22,6 +22,13 @@ lightgbm==4.6.0
 joblib==1.5.3
 scipy==1.17.1
 
+# Quant (backtesting, prediction intervals, risk/volatility metrics)
+# Shared discipline with the Vestora quant module
+statsmodels==0.14.6
+arch==7.3.0
+mapie==0.9.2
+pyarrow==18.1.0            # parquet I/O — required by notebooks/ intermediate pipeline outputs
+
 # Dashboard
 streamlit==1.57.0
 plotly==6.7.0
@@ -36,3 +43,10 @@ passlib==1.7.4
 # HTTP
 httpx==0.28.1
 requests==2.34.0
+
+# Fail-safe / Resilience
+# Retry + circuit-breaking for flaky connectivity, local caching for offline
+# fallback, and background scheduling for sync/reconciliation jobs
+tenacity==9.1.2
+diskcache==5.6.3
+apscheduler==3.12.0
