@@ -10,7 +10,7 @@ from pathlib import Path
 # backend/ml/config.py -> repo root is two levels up
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-DATA_PATH = REPO_ROOT / "data" / "raw" / "wfp_uganda_prices.csv"
+DATA_PATH = REPO_ROOT / "data" / "raw" / "wfp_food_prices_uga.csv"
 MODELS_DIR = REPO_ROOT / "ml" / "models"
 METRICS_PATH = MODELS_DIR / "metrics.json"
 
