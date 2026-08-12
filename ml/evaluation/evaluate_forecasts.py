@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from backend.ml.features import build_feature_matrix  # noqa: E402
 from backend.ml.price_forecast_model import FEATURE_COLUMNS, PriceForecastModel  # noqa: E402
 
-DATA_PATH = REPO_ROOT / "data" / "raw" / "wfp_uganda_prices.csv"
+DATA_PATH = REPO_ROOT / "data" / "raw" / "wfp_food_prices_uga.csv"
 MODEL_PATH = REPO_ROOT / "ml" / "models" / "price_forecast_xgb.pkl"
 
 
