@@ -21,7 +21,7 @@ from backend.ml.anomaly_detector import CounterfeitInputDetector  # noqa: E402
 from backend.ml.features import build_feature_matrix  # noqa: E402
 from ml.training.metrics_log import append_run  # noqa: E402
 
-DATA_PATH = REPO_ROOT / "data" / "raw" / "wfp_uganda_prices.csv"
+DATA_PATH = REPO_ROOT / "data" / "raw" / "wfp_food_prices_uga.csv"
 OUTPUT_PATH = REPO_ROOT / "ml" / "models" / "counterfeit_detector.pkl"
 
 
