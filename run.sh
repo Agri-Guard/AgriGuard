@@ -42,8 +42,8 @@ if [ -f "requirements.txt" ]; then
 fi
 
 # Env file
-if [ -f "config/env.example" ] && [ ! -f "config/.env" ]; then
-    cp config/env.example config/.env
+if [ -f "config/.env.example" ] && [ ! -f "config/.env" ]; then
+    cp config/.env.example config/.env
     echo "⚠️  Created config/.env — edit it with your DB/API keys!"
 fi
 
