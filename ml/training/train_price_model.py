@@ -45,7 +45,7 @@ def train_and_evaluate(df: pd.DataFrame) -> tuple:
     return model, {"mae": mae, "mape": mape}
 
 def save_model(model, commodity: str, market: str):
-    out_dir = Path("ml/saved_models")
+    out_dir = Path("ml/models")
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = f"{commodity}_{market}".lower().replace(" ", "_")
     joblib.dump(model, out_dir / f"{slug}_prophet.pkl")
@@ -53,7 +53,7 @@ def save_model(model, commodity: str, market: str):
 
 if __name__ == "__main__":
     df = load_and_clean(
-        "data/raw/uganda_food_prices.csv",
+        "data/raw/wfp_food_prices_uga.csv",
         commodity="Maize",
         market="Kampala"
     )
