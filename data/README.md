@@ -1,0 +1,134 @@
+# data/
+
+Dataset card and directory layout for AgriGuard's two data sources: WFP crop
+prices (the core dataset every ML model and API route depends on) and
+Open-Meteo weather (collected, not yet wired into the forecasting pipeline).
+
+```
+data/
+├── raw/
+│   ├── wfp_food_prices_uga.csv     # canonical price dataset — see below
+│   └── weather/
+│       ├── {market}_historical_{fetched_date}.json
+│       └── {market}_forecast_{fetched_date}.json
+├── processed/
+│   └── weather/
+│       ├── uganda_weather_historical_{fetched_date}.csv   # all markets, combined
+│       └── uganda_weather_forecast_{fetched_date}.csv
+└── README.md                        # this file
+```
+
+## 1. `raw/wfp_food_prices_uga.csv` — primary dataset
+
+**Source:** [WFP VAM Food Prices — Uganda](https://data.humdata.org/dataset/wfp-food-prices-for-uganda)
+(HDX, open license — see the HDX page for current terms). Fetched by
+`python scripts/download_wfp_data.py`, which writes this exact filename —
+every consumer below hardcodes/defaults to it, so don't rename it without
+updating `config/.env`'s `AGRIGUARD_PRICE_DATA`.
+
+**Snapshot in this repo:** 8,240 rows, 2018-01-01 → 2026-07-01, no missing
+values in any column.
+
+**Schema:**
+
+| Column | Type | Notes |
+|---|---|---|
+| `date` | date (`YYYY-MM-DD`) | Monthly observation |
+| `country` | string | Always `Uganda` |
+| `market` | string | One of: Arua, Fort Portal, Gulu, Jinja, Kampala, Kasese, Lira, Mbale, Mbarara, Soroti |
+| `category` | string | Always `cereals and tubers` in the current snapshot |
+| `commodity` | string | One of: Beans, Cassava, Groundnuts, Maize, Millet, Rice, Sorghum, Sweet Potato |
+| `unit` | string | Always `KG` |
+| `currency` | string | Always `UGX` |
+| `pricetype` | string | Always `Retail` |
+| `price` | float | Local-currency price per unit |
+| `usdprice` | float | USD-converted price per unit |
+| `latitude` / `longitude` | float | Market coordinates |
+
+**Consumers:** `backend/app/model.py`, `backend/app/routers/{forecasts,markets,ussd}.py`,
+`backend/ml/{config,train}.py`, `ml/training/*.py`, `ml/evaluation/evaluate_forecasts.py`,
+`scripts/train_models.py`. All of these now agree on this one filename —
+this pass fixed three modules (`backend/ml/config.py`,
+`ml/evaluation/evaluate_forecasts.py`, `ml/training/train_anomaly_model.py`)
+that were pointing at a nonexistent `wfp_uganda_prices.csv`, and one
+(`ml/training/train_price_model.py`) pointing at a nonexistent
+`uganda_food_prices.csv`. Both would have failed with `FileNotFoundError` on
+a clean clone.
+
+**Refresh:**
+```bash
+python scripts/download_wfp_data.py
+```
+
+**Versioning:** committed to the repo as a ~770 KB reference snapshot so a
+fresh clone can train and demo immediately without an HDX round-trip. If the
+dataset grows materially (multi-year backfill, more markets), move to
+Git LFS or re-download on CI rather than growing this file indefinitely
+in normal git history.
+
+## 2. `raw/weather/` and `processed/weather/` — collected, not yet integrated
+
+`scripts/fetch_weather.py` pulls daily weather (temperature, rainfall,
+humidity, wind, evapotranspiration, plus a derived water-balance proxy) from
+[Open-Meteo](https://open-meteo.com) for **8** of the 10 WFP markets —
+Kampala, Gulu, Mbarara, Mbale, Kasese, Lira, Jinja, Arua. **Fort Portal and
+Soroti are not covered yet**; add their coordinates to `MARKETS` in
+`scripts/fetch_weather.py` before relying on full national weather coverage.
+
+**Naming:** every file is timestamped with its *fetch* date
+(`{market}_{historical|forecast}_{YYYY-MM-DD}.json`), not the data's date
+range. The files currently in this repo were fetched 2026-06-14.
+
+**Two very different shelf lives:**
+- **`historical`** files cover the trailing 365 days as of the fetch date.
+  Their content stays a valid reference sample indefinitely (a labeled record
+  of what weather actually happened), so they're kept in git as demo/offline
+  fixtures.
+- **`forecast`** files are a 16-day-ahead snapshot. These are stale within
+  weeks by design and should **not** be treated as current — re-run
+  `scripts/fetch_weather.py` rather than trusting a committed forecast file.
+  `.gitignore` excludes new forecast snapshots going forward; the ones
+  already in this repo predate that rule and are kept only as a schema
+  example — do not use them for anything time-sensitive.
+
+**Schema** (`processed/weather/uganda_weather_*.csv`, one row per market-day):
+`date, market, region, latitude, longitude, elevation_m, temp_max_c,
+temp_min_c, rainfall_mm, rain_mm, precip_hours, humidity_max_pct,
+humidity_min_pct, wind_speed_max_kmh, sunshine_seconds,
+et0_evapotranspiration_mm, water_balance_mm, fetched_at, data_source`
+
+**Known gap:** nothing in `backend/` or `ml/` currently reads from
+`data/raw/weather/` or `data/processed/weather/` — weather is collected but
+not yet joined into the price-forecasting feature set. The intended
+integration point (rainfall/drought-stress as a leading indicator of price
+spikes) is noted in `fetch_weather.py`'s docstring but not implemented. If
+you pick this up: join on `(market, date)`, watch for the market-name gap
+above, and mind the forecast/historical distinction when deciding what's
+safe to use for training vs. what's only safe for live inference context.
+
+**Refresh:**
+```bash
+python scripts/fetch_weather.py                    # all 8 covered markets
+python scripts/fetch_weather.py --market Kampala    # single market
+python scripts/fetch_weather.py --days 90           # shorter history window
+python scripts/fetch_weather.py --no-forecast       # skip the 16-day forecast call
+```
+
+## Data quality
+
+`scripts/validate_data.py` exists as the intended place for schema/range
+checks on both datasets before training (e.g. price outlier bounds, date
+continuity, market/commodity whitelist checks) but is currently an empty
+stub — it's a real gap, not a hidden pipeline. Until it's implemented,
+`ml/training/*.py` and `backend/ml/train.py` are the only things that will
+notice a malformed row, and only implicitly (a crash or a silently bad
+model), not through an explicit validation report.
+
+## What's git-ignored and why
+
+See root `.gitignore`. Summary: the WFP CSV and historical-weather JSON/CSV
+are committed as small, stable reference data so the repo is runnable out of
+the box. Trained model artifacts (`ml/models/*.pkl`), forecast-weather
+snapshots, and anything under `data/processed/` beyond the committed
+historical-weather CSVs are regenerated by scripts, not hand-maintained, and
+should not be committed.
