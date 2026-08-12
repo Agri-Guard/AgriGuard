@@ -7,8 +7,8 @@ Trains and saves two models:
 
 Usage:
     python scripts/train_models.py
-    python scripts/train_models.py --data data/raw/wfp_food_prices_uganda.csv
-    python scripts/train_models.py --data data/raw/wfp_food_prices_uganda.csv --out ml/models
+    python scripts/train_models.py --data data/raw/wfp_food_prices_uga.csv
+    python scripts/train_models.py --data data/raw/wfp_food_prices_uga.csv --out ml/models
 
 Pipeline:
     load CSV → clean → feature engineering → train → evaluate → save
