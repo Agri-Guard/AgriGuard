@@ -4,7 +4,7 @@ version: "3.9"
 # AgriGuard docker-compose
 # ─────────────────────────────────────────────────────────────────────────────
 # Quick start:
-#   cp config/env.example config/.env   # fill in your values
+#   cp config/.env.example config/.env   # fill in your values
 #   docker-compose up --build
 #
 # To force fresh data + model training:
