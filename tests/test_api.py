@@ -34,17 +34,8 @@ MOCK_PREDICT_RESULT = {
     "currency": "UGX",
 }
 
-MOCK_DETECT_RESULT = {
-    "is_fake": False,
-    "confidence": 0.92,
-    "fake_probability": 0.08,
-    "genuine_probability": 0.92,
-    "risk_level": "LOW",
-}
-
 MOCK_STATUS = {
     "price_model": True,
-    "fake_detector": True,
     "encoders": True,
     "data_file": True,
     "metrics": {"price_model": {"r2": 0.87}},
@@ -108,47 +99,6 @@ def test_predict_model_not_ready():
             "month": 6,
         })
     assert r.status_code == 503
-
-
-# ── /api/v1/validate ───────────────────────────────────────────────────────
-
-def test_validate_genuine():
-    MOCK_RESPONSE = {
-        "product_name": "Test Seed",
-        "is_fake": False,
-        "confidence": 0.95,
-        "fake_probability": 0.05,
-        "genuine_probability": 0.95,
-        "risk_level": "LOW",
-        "recommendation": "Product appears genuine. Safe to use.",
-    }
-    with patch("backend.app.validator.validate", return_value=MagicMock(**MOCK_RESPONSE)):
-        r = client.post("/api/v1/validate", json={
-            "product_name": "Test Seed",
-            "weight_deviation_pct": 1.0,
-            "label_quality_score": 9.0,
-            "seal_integrity_score": 9.5,
-            "barcode_valid": 1,
-            "seller_rating": 4.5,
-            "price_deviation_pct": 2.0,
-            "batch_code_valid": 1,
-            "visual_anomaly_score": 0.5,
-        })
-    assert r.status_code == 200
-
-
-def test_validate_missing_product_name():
-    r = client.post("/api/v1/validate", json={
-        "weight_deviation_pct": 1.0,
-        "label_quality_score": 9.0,
-        "seal_integrity_score": 9.5,
-        "barcode_valid": 1,
-        "seller_rating": 4.5,
-        "price_deviation_pct": 2.0,
-        "batch_code_valid": 1,
-        "visual_anomaly_score": 0.5,
-    })
-    assert r.status_code == 422
 
 
 # ── /api/v1/forecasts ──────────────────────────────────────────────────────

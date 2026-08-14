@@ -23,7 +23,6 @@ def test_status_returns_dict():
     s = m.status()
     assert isinstance(s, dict)
     assert "price_model" in s
-    assert "fake_detector" in s
     assert "data_file" in s
 
 
@@ -50,18 +49,6 @@ def test_predict_price_raises_when_no_model():
             m.predict_price("Maize", "Kampala", 2025, 6)
     finally:
         m._price_model = original
-
-
-def test_detect_fake_raises_when_no_model():
-    from backend.app import model as m
-    from backend.app.model import ModelNotReadyError
-    original = m._fake_model
-    m._fake_model = None
-    try:
-        with pytest.raises(ModelNotReadyError):
-            m.detect_fake({})
-    finally:
-        m._fake_model = original
 
 
 def test_get_metrics_returns_dict():
