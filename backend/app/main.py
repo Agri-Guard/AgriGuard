@@ -9,7 +9,7 @@ Purpose:
 - Provide stable API for Streamlit frontend
 
 Design principle:
-👉 Maximum reliability for live demo (May 29 MVP pitch)
+👉 Maximum reliability for live demo
 """
 
 from datetime import datetime
