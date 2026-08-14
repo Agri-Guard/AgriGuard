@@ -16,8 +16,7 @@ committed.
 
 ```bash
 cp config/.env.example config/.env
-# edit config/.env — at minimum, set ANTHROPIC_API_KEY if you want the
-# Claude Vision fake-input check; everything else has a working dev default
+# edit config/.env — everything has a working dev default
 ```
 
 `run.sh` does this automatically on first run if `config/.env` doesn't exist yet.
@@ -51,7 +50,6 @@ that wouldn't make sense on a bare-metal run.
 | `FRONTEND_URL` | `http://localhost:8501` | `core/config.py` (CORS allow-list) | |
 | `AGRIGUARD_PRICE_DATA` | `data/raw/wfp_food_prices_uga.csv` | `model.py`, `routers/forecasts.py`, `routers/markets.py`, `routers/ussd.py`, `backend/ml/config.py` | Must point at the file produced by `scripts/download_wfp_data.py` — see `data/README.md` |
 | `MODEL_DIR` | `ml/models` | `model.py`, `backend/ml/config.py`, `scripts/train_models.py` | Repo-root artifact store, gitignored, produced by `scripts/train_models.py`. Distinct from `backend/ml/`, which is the importable package |
-| `ANTHROPIC_API_KEY` | empty | `model.py` (Claude Vision fake-input check) | Optional — Isolation Forest anomaly detection still works without it |
 | `DATABASE_URL` | `sqlite:///./agriguard_dev.db` | `core/config.py`, `database.py` | SQLite is dev-only; use MySQL (`aiomysql`/`PyMySQL`, already in `requirements.txt`) in production. The `prices` router that owns this layer is not currently wired into `main.py` — see root `README.md` → Known Issues |
 | `AT_API_KEY` / `AT_USERNAME` | empty | `routers/ussd.py` (real gateway path only) | Not needed for `/ussd/simulate`, the endpoint the Streamlit USSD simulator and local dev use |
 
