@@ -49,8 +49,8 @@ with c1:
     </div>""", unsafe_allow_html=True)
 with c2:
     st.markdown("""<div class="feat-card">
-    <h4>🔍 Input Validator</h4>
-    <p>Rule-based + anomaly detection to flag suspicious agricultural input reports.</p>
+    <h4>🌦️ Weather Insights</h4>
+    <p>Historical and 14-day forecast weather data across Ugandan markets, conveyed alongside price signals.</p>
     </div>""", unsafe_allow_html=True)
 with c3:
     st.markdown("""<div class="feat-card">
