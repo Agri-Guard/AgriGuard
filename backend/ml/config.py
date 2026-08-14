@@ -15,12 +15,6 @@ MODELS_DIR = REPO_ROOT / "ml" / "models"
 METRICS_PATH = MODELS_DIR / "metrics.json"
 
 PRICE_MODEL_PATH = MODELS_DIR / "price_forecast_xgb.pkl"
-ANOMALY_MODEL_PATH = MODELS_DIR / "counterfeit_detector.pkl"
-
-# Isolation Forest default -- a starting estimate, not a measured
-# rate. See anomaly_detector.py docstring for why this should be
-# retuned once real MAAIF field data on counterfeit incidence exists.
-DEFAULT_CONTAMINATION = 0.05
 
 FORECAST_HORIZON_WEEKS = 4
 TIME_SPLIT_RATIO = 0.8  # time-ordered train/test split, never shuffled
