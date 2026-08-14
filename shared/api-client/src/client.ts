@@ -222,23 +222,6 @@ export interface NationalSummaryResponse {
   generated_at: string;
 }
 
-/** Input for the fake-input-detection endpoint. Mirrors backend/app/schemas.py::FakeInputRequest. */
-export interface FakeInputRequest {
-  crop?: string;
-  region?: string;
-  date?: string;
-}
-
-/** Output of the fake-input-detection endpoint. Mirrors backend/app/schemas.py::FakeDetectionResponse. */
-export interface FakeDetectionResponse {
-  is_valid: boolean;
-  is_fake: boolean;
-  confidence: number;
-  reason?: string | null;
-  errors?: string[] | null;
-  timestamp: string;
-}
-
 /** Root landing response from GET /. */
 export interface ApiInfoResponse {
   message: string;
@@ -308,21 +291,6 @@ export class AgriGuardApiClient {
    */
   predictPrice(payload: PricePredictionRequest): Promise<PricePredictionResponse> {
     return this.request({ method: "POST", url: "/api/v1/predict", data: payload });
-  }
-
-  /**
-   * POST /api/v1/validate — fake/counterfeit input detection.
-   *
-   * As of this writing the backend always returns HTTP 501: FakeInputRequest
-   * doesn't yet carry the physical input-quality fields (moisture %,
-   * purity %, germination rate, ...) that backend/app/model.py::detect_fake()
-   * needs, and the training pipeline that would define them isn't in the
-   * repo yet. This method is wired up so callers don't need to change once
-   * the backend catches up — for now, expect every call to reject with an
-   * AgriGuardApiError whose `status` is 501.
-   */
-  validateInput(payload: FakeInputRequest = {}): Promise<FakeDetectionResponse> {
-    return this.request({ method: "POST", url: "/api/v1/validate", data: payload });
   }
 
   // ── Forecasts (routers/forecasts.py) ─────────────────────────────────────

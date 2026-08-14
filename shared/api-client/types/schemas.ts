@@ -11,7 +11,6 @@ export interface HealthResponse {
   version: string;
   ml_ready: boolean;
   validator_ready: boolean;
-  fake_detector_ready: boolean;
   timestamp: string;
 }
 
