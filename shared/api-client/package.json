@@ -2,8 +2,8 @@
   "name": "@agriguard/api-client",
   "version": "0.1.0",
   "description": "Shared TypeScript client for the AgriGuard FastAPI backend",
-  "main": "dist/client.js",
-  "types": "dist/client.d.ts",
+  "main": "dist/src/client.js",
+  "types": "dist/src/client.d.ts",
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
