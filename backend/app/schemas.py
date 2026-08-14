@@ -28,16 +28,6 @@ class PricePredictionRequest(BaseModel):
     date: str = Field(..., example="2026-06-01")
 
 
-class FakeInputRequest(BaseModel):
-    """
-    Input for fake input detection module.
-    """
-
-    crop: Optional[str] = None
-    region: Optional[str] = None
-    date: Optional[str] = None
-
-
 # =============================================================================
 # RESPONSE SCHEMAS
 # =============================================================================
@@ -62,22 +52,6 @@ class PricePredictionResponse(BaseModel):
     timestamp: datetime
 
 
-class FakeDetectionResponse(BaseModel):
-    """
-    Output from input validation / fake detection system.
-    """
-
-    is_valid: bool
-    is_fake: bool
-
-    confidence: float = Field(..., ge=0, le=1)
-
-    reason: Optional[str] = None
-    errors: Optional[list[str]] = None
-
-    timestamp: datetime
-
-
 # =============================================================================
 # GENERIC SYSTEM RESPONSE (OPTIONAL BUT USEFUL FOR /health etc.)
 # =============================================================================
@@ -90,5 +64,4 @@ class HealthResponse(BaseModel):
     status: str
     version: str
     ml_ready: bool
-    fake_detector_ready: bool
     timestamp: datetime
