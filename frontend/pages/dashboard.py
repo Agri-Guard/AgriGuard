@@ -3,7 +3,6 @@ AgriGuard Dashboard — Backend-Connected + Weather Insights
 ==========================================================
 Fully wired to the FastAPI backend:
   POST /api/v1/predict           → Price Prediction tab
-  POST /api/v1/validate          → Fake Input Detector tab
   GET  /forecasts/{commodity}    → Forecast chart (Prophet/XGBoost)
   GET  /forecasts/history/{c}    → Historical sparkline
   GET  /forecasts/commodities    → Dynamic crop/market dropdowns
@@ -392,9 +391,8 @@ st.divider()
 # ─────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "🌽 Price Forecast",
-    "🔍 Input Validator",
     "📊 Market Intelligence",
     "🗺️ National Overview",
     "🌦️ Weather Insights",
@@ -535,82 +533,6 @@ with tab1:
             pb.metric("Trend",            pred_data.get("trend", "—").title())
             pc.metric("Recommendation",   pred_data.get("recommendation", "—"))
             pd_.metric("Confidence",      f"{pred_data.get('confidence', 0)*100:.0f}%")
-
-# ══════════════════════════════════════════════
-# TAB 2 — FAKE INPUT DETECTOR
-# ══════════════════════════════════════════════
-with tab2:
-    st.subheader("🔍 Agricultural Input Validator")
-    st.caption("Calls `POST /api/v1/validate` — checks crop, region and date for anomalies.")
-
-    with st.form("validator_form"):
-        vc1, vc2, vc3 = st.columns(3)
-        v_crop   = vc1.selectbox("🌽 Crop",   available_crops, key="v_crop")
-        v_region = vc2.text_input("📍 Region", value=market,    key="v_region")
-        v_date   = vc3.date_input("📅 Date",   value=datetime.today(), key="v_date")
-        submitted = st.form_submit_button("🔎 Validate Input", type="primary", use_container_width=True)
-
-    if submitted:
-        payload = {"crop": v_crop.lower(), "region": v_region, "date": str(v_date)}
-        with st.spinner("Running validation pipeline…"):
-            val_data, val_err = api("POST", "/api/v1/validate", base_url, json=payload)
-
-        if val_err:
-            st.error(f"Validation call failed: {val_err}")
-        else:
-            is_valid = val_data.get("is_valid", False)
-            is_fake  = val_data.get("is_fake",  False)
-            conf     = val_data.get("confidence", 0)
-            errors   = val_data.get("errors") or []
-            reason   = val_data.get("reason", "")
-
-            if is_valid:
-                st.success(f"✅ **INPUT VALID** — Confidence: **{conf*100:.0f}%**")
-                st.balloons()
-            else:
-                st.error(f"⚠️ **SUSPICIOUS / INVALID INPUT** — Confidence: **{conf*100:.0f}%**")
-
-            r1, r2, r3 = st.columns(3)
-            r1.metric("Valid?",     "✅ Yes" if is_valid else "❌ No")
-            r2.metric("Flagged?",   "🚩 Yes" if is_fake  else "✅ No")
-            r3.metric("Confidence", f"{conf*100:.0f}%")
-
-            if reason:
-                st.info(f"**Reason:** {reason}")
-            if errors:
-                st.warning("**Validation errors:**\n" + "\n".join(f"- {e}" for e in errors))
-
-    st.markdown("---")
-    st.markdown("#### Batch Validation")
-    st.caption("Upload a CSV with columns `crop, region, date` to validate multiple records at once.")
-    uploaded = st.file_uploader("Upload CSV", type=["csv"])
-    if uploaded:
-        try:
-            df_batch = pd.read_csv(uploaded)
-            required = {"crop", "region", "date"}
-            if not required.issubset(df_batch.columns):
-                st.error(f"CSV must have columns: {required}")
-            else:
-                results = []
-                bar = st.progress(0)
-                for i, row in df_batch.iterrows():
-                    payload = {
-                        "crop":   str(row["crop"]).lower(),
-                        "region": str(row["region"]),
-                        "date":   str(row["date"]),
-                    }
-                    res, _ = api("POST", "/api/v1/validate", base_url, json=payload)
-                    if res:
-                        results.append({
-                            **row.to_dict(),
-                            "valid":      res.get("is_valid"),
-                            "flagged":    res.get("is_fake"),
-                            "confidence": f"{res.get('confidence',0)*100:.0f}%",
-                        })
-                    bar.progress((i + 1) / len(df_batch))
-                st.dataframe(pd.DataFrame(results), use_container_width=True)
-        except Exception as exc:
-            st.error(f"Error processing CSV: {exc}")
 
 # ══════════════════════════════════════════════
 # TAB 3 — MARKET INTELLIGENCE
