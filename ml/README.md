@@ -17,7 +17,6 @@ artifacts. Kept separate from `backend/ml/` on purpose:
 ml/
 ├── training/
 │   ├── train_price_model.py     # CLI: train + save the XGBoost forecaster
-│   ├── train_anomaly_model.py   # CLI: train + save the Isolation Forest detector
 │   └── evaluate.py              # Backtest a saved model against held-out data
 ├── models/                      # Saved .pkl artifacts (gitignored) + metrics.json (committed)
 └── README.md
@@ -28,7 +27,6 @@ ml/
 ```bash
 # from repo root, after scripts/download_wfp_data.py has produced data/raw/wfp_food_prices_uga.csv
 python -m ml.training.train_price_model
-python -m ml.training.train_anomaly_model
 python -m ml.training.evaluate --model ml/models/price_forecast_xgb.pkl
 ```
 

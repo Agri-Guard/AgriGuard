@@ -49,7 +49,7 @@ values in any column.
 `backend/ml/{config,train}.py`, `ml/training/*.py`, `ml/evaluation/evaluate_forecasts.py`,
 `scripts/train_models.py`. All of these now agree on this one filename —
 this pass fixed three modules (`backend/ml/config.py`,
-`ml/evaluation/evaluate_forecasts.py`, `ml/training/train_anomaly_model.py`)
+`ml/evaluation/evaluate_forecasts.py`)
 that were pointing at a nonexistent `wfp_uganda_prices.csv`, and one
 (`ml/training/train_price_model.py`) pointing at a nonexistent
 `uganda_food_prices.csv`. Both would have failed with `FileNotFoundError` on
