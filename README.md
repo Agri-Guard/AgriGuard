@@ -136,8 +136,7 @@ AgriGuard/
 │   ├── app/
 │   │   ├── main.py            # FastAPI entry point + router wiring
 │   │   ├── core/config.py     # Settings, reads config/.env — see config/README.md
-│   │   ├── model.py           # ML model loader + inference (XGBoost)
-│   │   ├── validator.py       # Input validation
+│   │   ├── model.py           # ML model loader + inference (XGBoost)       # Input validation
 │   │   ├── schemas.py         # Core Pydantic schemas
 │   │   ├── routers/
 │   │   │   ├── forecasts.py   # /forecasts/* — XGBoost/Prophet forecasts
