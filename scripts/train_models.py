@@ -1,9 +1,8 @@
 """
 scripts/train_models.py — AgriGuard ML Model Training Pipeline
 ===============================================================
-Trains and saves two models:
+Trains and saves:
   1. price_forecast_model.pkl  — XGBoost regressor for crop price prediction
-  2. fake_detector_model.pkl   — Isolation Forest for anomaly / fake input detection
 
 Usage:
     python scripts/train_models.py
@@ -25,7 +24,6 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import IsolationForest
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
@@ -195,57 +193,17 @@ def train_price_model(X, y):
 
 
 # =============================================================================
-# 4. TRAIN FAKE INPUT DETECTOR (Isolation Forest)
+# 4. SAVE ARTIFACTS
 # =============================================================================
 
-def train_fake_detector(X):
-    """
-    Isolation Forest trained on the price feature space.
-    Inputs that are far from the training distribution are flagged
-    as potential fake / erroneous reports.
-    contamination=0.05 means ~5% of training data is treated as anomalous
-    (tunable based on MAAIF field survey error rates).
-    """
-    print("\n🔍 Training Isolation Forest anomaly detector…")
-
-    model = IsolationForest(
-        n_estimators=200,
-        contamination=0.05,
-        random_state=42,
-        n_jobs=-1,
-    )
-    model.fit(X)
-
-    # Quick self-eval: fraction flagged on training data
-    scores  = model.decision_function(X)
-    flagged = (model.predict(X) == -1).sum()
-    print(f"   Training samples : {len(X):,}")
-    print(f"   Flagged as anomaly: {flagged:,} ({100*flagged/len(X):.1f}%)")
-    print(f"   Score range      : [{scores.min():.3f}, {scores.max():.3f}]")
-
-    metrics = {
-        "model":             "IsolationForest",
-        "n_train":           int(len(X)),
-        "contamination":     0.05,
-        "flagged_train_pct": round(100 * flagged / len(X), 1),
-    }
-    return model, metrics
-
-
-# =============================================================================
-# 5. SAVE ARTIFACTS
-# =============================================================================
-
-def save_artifacts(outdir: Path, price_model, fake_model, le_crop, le_market,
-                   feature_cols, price_metrics, fake_metrics):
+def save_artifacts(outdir: Path, price_model, le_crop, le_market,
+                   feature_cols, price_metrics):
     outdir.mkdir(parents=True, exist_ok=True)
 
     price_path = outdir / "price_forecast_model.pkl"
-    fake_path  = outdir / "fake_detector_model.pkl"
     meta_path  = outdir / "metrics.json"
 
     joblib.dump(price_model, price_path, compress=3)
-    joblib.dump(fake_model,  fake_path,  compress=3)
 
     # Save encoders and feature list alongside models
     joblib.dump({"le_crop": le_crop, "le_market": le_market,
@@ -254,14 +212,12 @@ def save_artifacts(outdir: Path, price_model, fake_model, le_crop, le_market,
 
     all_metrics = {
         "price_forecast": price_metrics,
-        "fake_detector":  fake_metrics,
     }
     with open(meta_path, "w") as f:
         json.dump(all_metrics, f, indent=2)
 
     print(f"\n✅ Saved:")
     print(f"   {price_path}  ({price_path.stat().st_size / 1024:.0f} KB)")
-    print(f"   {fake_path}   ({fake_path.stat().st_size  / 1024:.0f} KB)")
     print(f"   {meta_path}")
 
 
@@ -283,12 +239,11 @@ def main(data_path: Path, outdir: Path):
     X, y, le_crop, le_market, feature_cols = build_features(df)
 
     price_model, price_metrics = train_price_model(X, y)
-    fake_model,  fake_metrics  = train_fake_detector(X)
 
     save_artifacts(
-        outdir, price_model, fake_model,
+        outdir, price_model,
         le_crop, le_market, feature_cols,
-        price_metrics, fake_metrics,
+        price_metrics,
     )
 
     print("\n🎉 Training complete. Models ready for inference.")
