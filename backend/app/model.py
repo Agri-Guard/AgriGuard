@@ -44,7 +44,6 @@ def _load_pkl(name: str) -> Optional[Any]:
 
 
 _price_model   = _load_pkl("price_forecast_model.pkl")
-_fake_model    = _load_pkl("fake_detector_model.pkl")
 _encoders      = _load_pkl("encoders.pkl")
 _metrics: dict = {}
 
@@ -80,7 +79,6 @@ def _get_price_df() -> pd.DataFrame:
 def status() -> dict:
     return {
         "price_model":   _price_model is not None,
-        "fake_detector": _fake_model  is not None,
         "encoders":      _encoders    is not None,
         "data_file":     DATA_FILE.exists(),
         "metrics":       _metrics,
@@ -158,33 +156,6 @@ def predict_price(commodity: str, market: str, year: int, month: int) -> dict:
         "lower_bound_ugx":     round(pred * 0.90, 2),
         "upper_bound_ugx":     round(pred * 1.10, 2),
         "currency":     "UGX",
-    }
-
-
-def detect_fake(features: dict) -> dict:
-    if _fake_model is None or _encoders is None:
-        raise ModelNotReadyError("Fake detector model not loaded.")
-
-    scaler   = _encoders.get("fake_detector_scaler")
-    feat_names = _encoders.get("fake_detector_features", [])
-    if scaler is None:
-        raise ModelNotReadyError("Fake detector scaler missing from encoders.pkl.")
-
-    X = np.array([[features.get(f, 0.0) for f in feat_names]])
-    X_scaled = scaler.transform(X)
-    proba = _fake_model.predict_proba(X_scaled)[0]
-    is_fake = bool(proba[1] > 0.5)
-
-    return {
-        "is_fake":          is_fake,
-        "confidence":       round(float(max(proba)), 4),
-        "fake_probability": round(float(proba[1]),   4),
-        "genuine_probability": round(float(proba[0]), 4),
-        "risk_level": (
-            "HIGH"   if proba[1] > 0.75 else
-            "MEDIUM" if proba[1] > 0.40 else
-            "LOW"
-        ),
     }
 
 
