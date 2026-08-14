@@ -3,9 +3,8 @@ AgriGuard MVP FastAPI Entry Point
 ==================================
 
 Purpose:
-- Serve crop price predictions
+- Serve crop price predictions and conveyance
 - Validate farmer inputs
-- Expose fake input detection
 - Provide stable API for Streamlit frontend
 
 Design principle:
@@ -22,12 +21,10 @@ from backend.app.core.config import settings
 from backend.app.schemas import (
     PricePredictionRequest,
     PricePredictionResponse,
-    FakeInputRequest,
-    FakeDetectionResponse
 )
 
 from backend.app.validator import validate_input
-from backend.app.model import predict_price, detect_fake, ModelNotReadyError
+from backend.app.model import predict_price, ModelNotReadyError
 
 from backend.app.routers.forecasts import router as forecasts_router
 from backend.app.routers.markets import router as markets_router
@@ -46,7 +43,7 @@ from backend.app.routers.ussd import router as ussd_router
 
 app = FastAPI(
     title="AgriGuard MVP",
-    description="AI-powered Crop Price Forecasting & Input Validation System",
+    description="AI-powered Crop Price Forecasting, Conveyance & Market Intelligence System",
     version=settings.app_version,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -97,7 +94,6 @@ def health_check():
         "version": settings.app_version,
         "ml_ready": True,
         "validator_ready": True,
-        "fake_detector_ready": True,
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -181,31 +177,4 @@ def predict_price_endpoint(payload: PricePredictionRequest):
         recommendation=recommendation,
         confidence=round(confidence, 2),
         timestamp=datetime.utcnow(),
-    )
-
-
-# =============================================================================
-# FAKE INPUT DETECTION ENDPOINT (TRUST LAYER)
-# =============================================================================
-
-@app.post("/api/v1/validate")
-def fake_detection_endpoint(payload: FakeInputRequest):
-    # TODO: FakeInputRequest currently only has crop/region/date, but
-    # detect_fake() needs physical input-quality measurements (whatever
-    # fields ml/models/encoders.pkl's "fake_detector_features" lists —
-    # e.g. moisture %, purity %, germination rate). encoders.pkl isn't in
-    # the repo yet (see README "Known issues"), so those field names
-    # aren't known. Redesign FakeInputRequest once the training pipeline
-    # defines them, then this can call detect_fake(payload.dict()) for real.
-    return JSONResponse(
-        status_code=501,
-        content={
-            "error": "Not implemented",
-            "detail": (
-                "Fake-input detection needs physical input-quality fields "
-                "(moisture, purity, germination rate, etc.) that aren't yet "
-                "defined in FakeInputRequest or produced by the training "
-                "pipeline's encoders.pkl. See README Known issues."
-            ),
-        },
     )
