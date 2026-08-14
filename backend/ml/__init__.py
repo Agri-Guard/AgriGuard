@@ -1,1 +1,1 @@
-"""AgriGuard ML package: price forecasting + counterfeit input detection."""
+"""AgriGuard ML package: crop price forecasting."""
