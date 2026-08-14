@@ -151,10 +151,11 @@ def train_selected_model(model_type: str, group: pd.DataFrame, feature_cols: Opt
     ignored for `"prophet"` (which trains directly on `date`/`price`).
     """
     if model_type == XGBOOST:
-        from xgboost import XGBRegressor
-
         if not feature_cols:
             raise ValueError("feature_cols is required to train an xgboost model")
+
+        from xgboost import XGBRegressor
+
         model = XGBRegressor(
             n_estimators=400, learning_rate=0.05, max_depth=6,
             subsample=0.8, colsample_bytree=0.8, random_state=42, verbosity=0,
