@@ -1,10 +1,18 @@
 # 🌾 AgriGuard
 
-> **Agricultural intelligence for Uganda** — crop price conveyance, crop price forecasting (using quant strategies and sentiment analysis), weather forecast conveyance, crop diseases detection, crop pests detection for all farmers, delivered via a mobile app (both Android and iOS), a desktop app (Windows and Linux) and a USSD interface for feature phones.
+> **Agricultural intelligence for Uganda** — crop price conveyance, crop price forecasting (using quant strategies), market intelligence, and weather insights & forecasts for smallholder farmers, delivered via a mobile app (Android and iOS), a desktop app (Windows and Linux), and a USSD interface for feature phones.
 
 Built by **Keith Ndiema Kissa** (2025/BCS/101/PS) · Mbarara University of
 Science and Technology, Uganda
 
+## Objectives
+
+AgriGuard exists to serve four things, and nothing else:
+
+1. **Crop price conveyance** — get price data to farmers on whatever device they have (app, desktop, or a feature phone via USSD)
+2. **Crop price prediction / forecasting** — XGBoost and Prophet forecasting per crop and market
+3. **Market intelligence** — cross-market comparisons, arbitrage signals, biggest movers, national summaries
+4. **Weather insights & forecasts** — historical and forecast weather, conveyed alongside price signals
 
 ## Status at a glance
 
@@ -12,7 +20,7 @@ Science and Technology, Uganda
 |---|---|
 | FastAPI backend — forecasts, markets, USSD | **Working.** Wired into `main.py`, backed by the committed WFP CSV. |
 | Streamlit dashboard | **Working.** Reads from the backend over HTTP. |
-| Price forecasting (XGBoost / Prophet) + counterfeit detection (Isolation Forest) | **Working**, trainable via `scripts/train_models.py`. |
+| Price forecasting (XGBoost / Prophet) | **Working**, trainable via `scripts/train_models.py`. |
 | `prices` router (CRUD price observations, MySQL-backed) | **Not wired in.** See Known Issues. |
 | Weather data collection | **Working as a standalone script**, not yet joined into the forecasting features. See `data/README.md`. |
 | `quant/` package | **Scaffold only** — empty files, shared discipline with [Vestora](https://github.com/Ve-stora/vestora)'s quant module, not yet implemented. |
@@ -20,7 +28,7 @@ Science and Technology, Uganda
 
 This section exists so the rest of the README doesn't have to hedge every
 claim — anything described below as working, is working; anything listed
-above as scaffold/legacy is described that way in its own section too.
+above as scaffold is described that way in its own section too.
 
 ## Problem
 
@@ -28,41 +36,38 @@ Ugandan farmers face some (if not all) of these compounding challenges:
 
 - **Price blindness** — no reliable way to know if today is a good day to sell
 - **Market fragmentation** — price gaps between markets go unexploited because farmers lack data
-- **Unpredictable weather** - made worse by information gaps
-- **Crop pests and diseases** - some of which are not easily identifiable
-
+- **Unpredictable weather** — made worse by information gaps
 
 ## Solution
 
 | Module | What it does | How |
 |---|---|---|
+| **Price Conveyance** | Delivers current and predicted prices to farmers over whatever channel they have | App (mobile/desktop) for internet-enabled devices, USSD for feature phones |
 | **Price Forecasting** | Predicts crop prices weeks ahead, per market | XGBoost on WFP price history, Prophet as an alternative single-series forecaster |
 | **Market Intelligence** | Cross-market comparisons, biggest movers, national summary | FastAPI serving the WFP dataset with trend analytics |
-| **Weather information conveyance** | Current and future weather patterns for atleast 10 years into the past and 14 days into the future |via the app |
+| **Weather Insights & Forecasts** | Current and historical weather, and a 14-day forecast, per market | Open-Meteo, surfaced in the app alongside price data |
 
 Accessible via an **app** for internet-enabled devices and a **USSD interface** for feature phones
 (`/ussd/simulate` locally; a real short-code requires an Africa's Talking
-
+account).
 
 ## Architecture
 
 ```
 ┌───────────────────────────────────────────────────────┐
 │  Streamlit Frontend  (port 8501)                       │
-│  Home · Dashboard · Price Forecast · Fake Detector      │
-│  · USSD Simulator                                       │
+│  Home · Dashboard · Price Forecast · USSD Simulator     │
 └────────────────────┬─────────────────────────────────── ┘
                       │ HTTP / REST
 ┌────────────────────▼─────────────────────────────────── ┐
 │  FastAPI Backend  (port 8000)                            │
 │  /forecasts/*  /markets/*  /ussd/*                       │
-│  /api/v1/predict  /api/v1/validate  /health               │
+│  /api/v1/predict  /health                                 │
 │  ( /prices/* implemented but not yet wired — see below ) │
 └──────┬─────────────┬──────────────┬───────────────────── ┘
        │              │              │
   XGBoost         Prophet        SQLite (dev)
-  + IsoForest     fallback       / MySQL (prod)
-  .pkl in ml/models/
+  .pkl in ml/models/  fallback       / MySQL (prod)
        │
   data/raw/wfp_food_prices_uga.csv  ←  scripts/download_wfp_data.py
 ```
@@ -82,8 +87,7 @@ pip install -r requirements.txt
 
 ```bash
 cp config/.env.example config/.env
-# edit config/.env — at minimum set ANTHROPIC_API_KEY if you want the
-# Claude Vision fake-input check; everything else has a working dev default
+# edit config/.env — everything has a working dev default
 ```
 See `config/README.md` for the full variable reference and how config
 resolution/precedence works.
@@ -92,7 +96,7 @@ resolution/precedence works.
 
 ```bash
 python scripts/download_wfp_data.py      # writes data/raw/wfp_food_prices_uga.csv
-python scripts/train_models.py           # trains XGBoost + Isolation Forest -> ml/models/
+python scripts/train_models.py           # trains XGBoost -> ml/models/
 ```
 See `data/README.md` for the dataset schema, provenance, and what's
 git-ignored vs. committed.
@@ -132,41 +136,40 @@ AgriGuard/
 │   ├── app/
 │   │   ├── main.py            # FastAPI entry point + router wiring
 │   │   ├── core/config.py     # Settings, reads config/.env — see config/README.md
-│   │   ├── model.py           # ML model loader + inference (XGBoost, IsoForest)
+│   │   ├── model.py           # ML model loader + inference (XGBoost)
 │   │   ├── validator.py       # Input validation
 │   │   ├── schemas.py         # Core Pydantic schemas
 │   │   ├── routers/
 │   │   │   ├── forecasts.py   # /forecasts/* — XGBoost/Prophet forecasts
 │   │   │   ├── markets.py     # /markets/*   — market intelligence
-│   │   │   ├── ussd.py        # /ussd/*      — USSD menu tree + simulator
+│   │   │   ├── ussd.py        # /ussd/*      — USSD menu tree + simulator (price conveyance)
 │   │   │   └── prices.py      # /prices/*    — implemented, NOT wired into main.py
 │   │   ├── models/, schemas/  # SQLAlchemy ORM + price-domain schemas (used by prices.py)
 │   │   ├── database.py        # SQLAlchemy engine/session (used by prices.py)
 │   │   └── services/          # price_service.py, forecast_service.py
 │   └── ml/                    # importable package: config.py, features.py,
-│                               # price_forecast_model.py, anomaly_detector.py, train.py
+│                               # price_forecast_model.py, train.py
 ├── frontend/                  # Streamlit: Home.py + pages/{dashboard,price_forecast,
-│                               # fake_detector,ussd_simulator}.py
+│                               # ussd_simulator}.py
 ├── ml/                        # training/evaluation workspace (not imported at runtime)
-│   ├── training/               # train_price_model.py, train_anomaly_model.py, feature_engineering.py
+│   ├── training/               # train_price_model.py, feature_engineering.py
 │   ├── evaluation/              # evaluate_forecasts.py
 │   ├── models/                 # trained .pkl artifacts (gitignored) + metrics.json (committed)
 │   └── README.md                # backend/ml/ vs ml/ split, explained
-├── quant/                      # SCAFFOLD — backtesting/intervals/risk-metrics, not yet implemented
-├── mobile/                     # SCAFFOLD — Flutter app skeleton, not yet implemented
-├── desktop/                    # SCAFFOLD — Tauri app skeleton, not yet implemented
+├── quant/                      # SCAFFOLD — backtesting/intervals/risk-metrics for price forecasting, not yet implemented
+├── mobile/                     # SCAFFOLD — Flutter app skeleton (price conveyance + weather), not yet implemented
+├── desktop/                    # SCAFFOLD — Tauri app skeleton (price conveyance + weather), not yet implemented
 ├── shared/api-client/          # SCAFFOLD — shared TS API client, not yet implemented
 ├── scripts/
 │   ├── download_wfp_data.py    # fetch WFP Uganda CSV from HDX
 │   ├── fetch_weather.py        # fetch Open-Meteo weather (not yet joined into ML features)
-│   ├── train_models.py         # train XGBoost + Isolation Forest
+│   ├── train_models.py         # train XGBoost price forecaster
 │   ├── load_data.py            # load prices into a DB (used by the not-yet-wired prices layer)
 │   └── validate_data.py        # EMPTY STUB — see data/README.md "Data quality"
 ├── notebooks/                  # tiered forecasting validation pipeline, run 01→05 — see notebooks/README.md
 ├── tests/                      # test_api.py, test_models.py
 ├── data/                       # WFP prices + Open-Meteo weather — see data/README.md
 ├── config/                     # env templates — see config/README.md
-├── fixed_files/                # LEGACY — superseded snapshot, see Known Issues
 ├── docs/                       # project documentation (Ministry of ICT showcase materials)
 ├── docker-compose.yml
 ├── requirements.txt
@@ -197,14 +200,6 @@ confidence-interval reference. `notebooks/` documents a more ambitious
 tiered (7/14/30/60–90 day) backtested version of this pipeline that hasn't
 been promoted into `scripts/train_models.py` yet — see `notebooks/README.md`.
 
-### Counterfeit Detection (Isolation Forest)
-
-Trained on the price feature space. Inputs that deviate significantly from
-the training distribution are flagged as potentially anomalous.
-`contamination=0.05` — a starting estimate, not a measured rate; retune once
-real MAAIF field data on counterfeit incidence exists (see
-`backend/ml/config.py`).
-
 ## API Reference
 
 Full interactive docs at `/docs` when the backend is running.
@@ -213,7 +208,6 @@ Full interactive docs at `/docs` when the backend is running.
 |---|---|---|
 | GET | `/health` | System health check |
 | POST | `/api/v1/predict` | Quick price prediction |
-| POST | `/api/v1/validate` | Fake input detector |
 | GET | `/forecasts/{commodity}` | ML price forecast |
 | GET | `/forecasts/commodities` | List available crops/markets |
 | GET | `/forecasts/history/{commodity}` | Historical price series |
@@ -223,7 +217,7 @@ Full interactive docs at `/docs` when the backend is running.
 | GET | `/markets/movers` | Biggest price gainers/losers |
 | GET | `/markets/arbitrage/{commodity}` | Cross-market arbitrage opportunities |
 | GET | `/markets/national-summary` | All commodities, national snapshot |
-| POST | `/ussd/`, `/ussd/simulate` | USSD session handler / local simulator (no Africa's Talking account needed) |
+| POST | `/ussd/`, `/ussd/simulate` | USSD session handler / local simulator (price conveyance; no Africa's Talking account needed) |
 
 `/prices/*` (paginated CRUD over price observations) is implemented in
 `backend/app/routers/prices.py` but not included in `main.py` — see Known
@@ -233,7 +227,6 @@ Issues before wiring it in.
 
 - **[WFP VAM Food Prices — Uganda](https://data.humdata.org/dataset/wfp-food-prices-for-uganda)** (HDX, open license) — historical crop prices, 10 markets, 8 commodities, 2018–present
 - **[Open-Meteo](https://open-meteo.com)** — free daily weather + 16-day forecast, no API key required, currently 8 of 10 markets covered
-- **Anthropic Claude Vision API** — optional counterfeit label scanning
 
 Full schema, provenance, and refresh commands: `data/README.md`.
 
@@ -247,7 +240,8 @@ real vs. aspirational:
   assume a MySQL-backed deployment this `docker-compose.yml` doesn't provision
   a service for. `DATABASE_URL` falls back to SQLite for dev, which the
   `aiomysql` driver in `requirements.txt` doesn't target — reconcile before
-  wiring this router in.
+  wiring this router in. It also imports from a nonexistent top-level `app`
+  package (should be `backend.app`) — fix that alongside the DB reconciliation.
 - **`scripts/validate_data.py` is an empty file.** No schema/range validation
   currently runs on either dataset before training. See `data/README.md`.
 - **Weather data isn't joined into the forecasting features yet.** Collected
@@ -256,33 +250,13 @@ real vs. aspirational:
 - **`quant/`, `mobile/`, `desktop/`, `shared/api-client/`** are directory
   scaffolds with dependency manifests but zero implementation — every file
   in them is currently empty.
-- **`fixed_files/`** is a standalone snapshot from an earlier fix pass
-  (its own `README.md`, `config/.env.example`, `backend/app/main.py`, etc.)
-  that predates the current, real versions of those files elsewhere in the
-  repo. It's not imported or referenced by anything and should be diffed
-  against the current files and removed rather than kept as a silent second
-  copy — that's exactly the kind of drift that caused the filename bugs
-  fixed in this pass (see below).
-- **Three filename mismatches in `ml/` fixed in this pass:**
-  `backend/ml/config.py` and `ml/evaluation/evaluate_forecasts.py` pointed at
-  a nonexistent `data/raw/wfp_uganda_prices.csv`; `ml/training/train_anomaly_model.py`
-  had the same bug; `ml/training/train_price_model.py` pointed at a
-  nonexistent `data/raw/uganda_food_prices.csv` and saved models to
-  `ml/saved_models/` instead of `ml/models/`. All four now point at the one
-  real file, `data/raw/wfp_food_prices_uga.csv`, and the one real artifact
-  directory, `ml/models/`. See `data/README.md` §1 for the consumer list.
-- **`config/env.example` vs `config/.env.example` mismatch fixed in this
-  pass.** `run.sh` checked for the wrong filename (missing leading dot) and
-  silently never auto-created `config/.env` on a fresh clone; `docker-compose.yml`'s
-  header comment had the same typo. Both now reference the real file.
 
 ## Roadmap
 
 - [ ] Wire the `prices` router in behind a real MySQL service, or drop it
 - [ ] Implement `scripts/validate_data.py`
 - [ ] Join weather data into the price-forecasting feature set
-- [ ] SMS push alerts via Africa's Talking
-- [ ] Satellite crop health integration (Sentinel-2)
+- [ ] SMS push alerts via Africa's Talking (price conveyance)
 - [ ] District-level food security index
 - [ ] Implement `mobile/`, `desktop/`, `shared/api-client/` past scaffolding
 - [ ] Multi-country expansion (Kenya, Tanzania)
