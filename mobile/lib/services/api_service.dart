@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/forecast_model.dart';
+import '../models/market_model.dart';
 
 /// Thin HTTP client for the AgriGuard FastAPI backend.
 class ApiService {
@@ -58,8 +59,24 @@ class ApiService {
         .toList();
   }
 
-  Future<Map<String, dynamic>> marketSummary(String commodity) async {
-    return _get('/markets/summary/${Uri.encodeComponent(commodity)}');
+  /// GET /markets/summary/{commodity} — cross-market comparison for one
+  /// commodity: best/worst market to sell in, national average, and a
+  /// plain-language recommendation. See CommodityMarketSummary for the
+  /// exact field names this maps from (they don't include top-level
+  /// "best_price"/"worst_price" — those are derived on the model itself).
+  Future<CommodityMarketSummary> marketSummary(String commodity) async {
+    final data = await _get('/markets/summary/${Uri.encodeComponent(commodity)}');
+    return CommodityMarketSummary.fromJson(data);
+  }
+
+  /// GET /markets/movers — biggest price gainers and losers across all
+  /// commodities and markets over `periodDays`.
+  Future<TopMoversResponse> topMovers({int periodDays = 30, int topN = 5}) async {
+    final data = await _get('/markets/movers', {
+      'period_days': '$periodDays',
+      'top_n': '$topN',
+    });
+    return TopMoversResponse.fromJson(data);
   }
 
   Future<Map<String, dynamic>> nationalSummary() async {
