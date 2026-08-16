@@ -70,13 +70,21 @@ def load_and_clean(data_path: Path) -> pd.DataFrame:
     df["price"] = pd.to_numeric(df["price"], errors="coerce")
     df = df[df["price"] > 0]
 
-    # Remove extreme outliers (> 5 std dev per commodity)
-    def remove_outliers(group):
-        mean, std = group["price"].mean(), group["price"].std()
-        return group[np.abs(group["price"] - mean) <= 5 * std] if std > 0 else group
-
-    df = df.groupby("commodity", group_keys=False).apply(remove_outliers)
-    df = df.reset_index(drop=True)
+    # Remove extreme outliers (> 5 std dev per commodity).
+    # Deliberately NOT df.groupby("commodity").apply(...): pandas changed
+    # whether the grouping column survives that call (a FutureWarning even
+    # on the pinned pandas==2.3.3; pandas 3.x drops "commodity" from the
+    # result outright, breaking every column reference below it). This
+    # vectorized transform()-based version has no such ambiguity and is
+    # markedly faster on 8k+ rows besides.
+    grp_price = df.groupby("commodity")["price"]
+    grp_mean = grp_price.transform("mean")
+    grp_std = grp_price.transform("std")
+    # std is NaN for a singleton group and 0 for a constant-price group —
+    # both mean "nothing to compare against", so keep those rows as-is,
+    # matching the original per-group "if std > 0 else group" behavior.
+    keep = grp_std.isna() | (grp_std == 0) | ((df["price"] - grp_mean).abs() <= 5 * grp_std)
+    df = df[keep].reset_index(drop=True)
 
     print(f"   Clean rows: {len(df):,}")
     print(f"   Crops     : {df['commodity'].nunique()}")
@@ -92,49 +100,78 @@ def load_and_clean(data_path: Path) -> pd.DataFrame:
 def build_features(df: pd.DataFrame):
     """
     Time-series features for XGBoost.
-    All features are numeric — XGBoost doesn't need one-hot encoding,
-    but label encoding gives it ordinal signal for crop/market.
+
+    Column names and lag/roll/pct windows are NOT a free choice — they must
+    exactly match what backend/app/model.py::predict_price() builds at
+    inference time (market_enc, commodity_enc, price_lag{1,3,6,12},
+    price_roll{3,6,12}, price_pct{1,12}), since that's the only consumer of
+    this model. A trained model whose training-time feature set differs
+    from its inference-time feature set silently produces garbage
+    predictions — XGBoost only cares about *which array position* it was
+    trained on, not the column name, so a mismatch never raises, it just
+    predicts wrong. See predict_price()'s _lag/_roll_mean/_pct_change
+    helpers for the exact fallback semantics mirrored below.
     """
     df = df.copy()
 
     # Temporal features
-    df["year"]        = df["date"].dt.year
-    df["month"]       = df["date"].dt.month
-    df["quarter"]     = df["date"].dt.quarter
-    df["week"]        = df["date"].dt.isocalendar().week.astype(int)
-    df["day_of_year"] = df["date"].dt.dayofyear
+    df["year"]    = df["date"].dt.year
+    df["month"]   = df["date"].dt.month
+    df["quarter"] = df["date"].dt.quarter
 
     # Cyclic encoding of month (captures seasonality smoothly)
     df["month_sin"] = np.sin(2 * np.pi * df["month"] / 12)
     df["month_cos"] = np.cos(2 * np.pi * df["month"] / 12)
 
-    # Lag features (previous observed price for same crop×market)
-    df = df.sort_values(["commodity", "market", "date"])
-    df["price_lag_1m"] = df.groupby(["commodity", "market"])["price"].shift(1)
-    df["price_lag_3m"] = df.groupby(["commodity", "market"])["price"].shift(3)
-    df["price_lag_6m"] = df.groupby(["commodity", "market"])["price"].shift(6)
-
-    # Rolling statistics (3-month window)
-    roll = df.groupby(["commodity", "market"])["price"].transform(
-        lambda x: x.rolling(3, min_periods=1).mean()
-    )
-    df["price_roll_3m_avg"] = roll
-
-    # Label-encode categorical columns
+    # Label-encode categorical columns. Names ("commodity_enc"/"market_enc")
+    # and the encoder dict keys in save_artifacts() below must match
+    # predict_price()'s row dict and its le_commodity/le_market lookups.
     le_crop   = LabelEncoder()
     le_market = LabelEncoder()
-    df["crop_enc"]   = le_crop.fit_transform(df["commodity"].astype(str))
-    df["market_enc"] = le_market.fit_transform(df["market"].astype(str))
+    df["commodity_enc"] = le_crop.fit_transform(df["commodity"].astype(str))
+    df["market_enc"]    = le_market.fit_transform(df["market"].astype(str))
 
-    # Drop rows where lag features are NaN (first observations per group)
+    df = df.sort_values(["commodity", "market", "date"]).reset_index(drop=True)
+    price_by_group = df.groupby(["commodity", "market"])["price"]
+
+    # predict_price()'s fallback for "not enough history yet" is the mean
+    # price over that crop×market's *entire* available history (it has no
+    # notion of a growing window — hist is the full CSV, filtered only by
+    # crop+market). Matching that exactly means the fallback here is each
+    # group's overall mean, not an expanding/backward-looking mean.
+    group_mean = price_by_group.transform("mean")
+
+    # price_lag{n}: the price n observations before this row within the
+    # same crop×market series — mirrors hist["price"].iloc[-n] at
+    # inference (the nth-most-recent known price).
+    for n in (1, 3, 6, 12):
+        df[f"price_lag{n}"] = price_by_group.shift(n).fillna(group_mean)
+
+    # price_roll{n}: mean of the n observations immediately *preceding*
+    # this row (shift(1) first, so the row's own price is never included)
+    # — mirrors hist["price"].tail(n).mean() at inference.
+    for n in (3, 6, 12):
+        rolled = df.groupby(["commodity", "market"])["price"].transform(
+            lambda s, n=n: s.shift(1).rolling(n, min_periods=1).mean()
+        )
+        df[f"price_roll{n}"] = rolled.fillna(group_mean)
+
+    # price_pct{n}: % change from n periods before the last known price to
+    # the last known price itself — mirrors _pct_change()'s
+    # (hist[-1] - hist[-(n+1)]) / hist[-(n+1)], expressed here in terms of
+    # this row's two preceding lags (shift(1) vs shift(1+n)).
+    for n in (1, 12):
+        recent = price_by_group.shift(1)
+        older  = price_by_group.shift(1 + n)
+        df[f"price_pct{n}"] = ((recent - older) / (older + 1e-9)).fillna(0.0)
+
     feature_cols = [
-        "crop_enc", "market_enc",
-        "year", "month", "quarter", "week", "day_of_year",
-        "month_sin", "month_cos",
-        "price_lag_1m", "price_lag_3m", "price_lag_6m",
-        "price_roll_3m_avg",
+        "market_enc", "commodity_enc",
+        "year", "month", "quarter", "month_sin", "month_cos",
+        "price_lag1", "price_lag3", "price_lag6", "price_lag12",
+        "price_roll3", "price_roll6", "price_roll12",
+        "price_pct1", "price_pct12",
     ]
-    df = df.dropna(subset=feature_cols)
 
     X = df[feature_cols]
     y = df["price"]
@@ -205,9 +242,11 @@ def save_artifacts(outdir: Path, price_model, le_crop, le_market,
 
     joblib.dump(price_model, price_path, compress=3)
 
-    # Save encoders and feature list alongside models
-    joblib.dump({"le_crop": le_crop, "le_market": le_market,
-                 "feature_cols": feature_cols},
+    # Keys here ("market", "commodity", "price_features") must match
+    # backend/app/model.py::predict_price()'s _encoders.get(...) calls
+    # exactly — that's the only code that reads this file.
+    joblib.dump({"market": le_market, "commodity": le_crop,
+                 "price_features": feature_cols},
                 outdir / "encoders.pkl", compress=3)
 
     all_metrics = {
