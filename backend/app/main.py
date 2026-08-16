@@ -4,7 +4,6 @@ AgriGuard MVP FastAPI Entry Point
 
 Purpose:
 - Serve crop price predictions and conveyance
-- Validate farmer inputs
 - Provide stable API for Streamlit frontend
 
 Design principle:
@@ -33,7 +32,7 @@ from backend.app.routers.ussd import router as ussd_router
 # NOTE: routers/prices.py is intentionally NOT wired in yet. It depends on a
 # separate, still-broken layer (app/database.py, app/services/price_service.py,
 # app/models/price.py) that imports a nonexistent top-level `app` package and
-# assumes a Postgres service this docker-compose doesn't define. That's a
+# assumes a MySQL service this docker-compose doesn't define. That's a
 # bigger fix than this pass covers — see README "Known issues".
 
 
