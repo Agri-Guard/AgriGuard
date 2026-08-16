@@ -617,10 +617,10 @@ with tab4:
         df_ns = pd.DataFrame([{
             "Commodity":      c["commodity"],
             "National Avg":   ugx(c["national_avg_price"]),
-            "Markets":        c.get("market_count", "—"),
+            "Markets":        c.get("markets_tracked", "—"),
             "Trend":          c.get("trend", "stable").title(),
-            "Highest Price":  ugx(c.get("highest_price")),
-            "Lowest Price":   ugx(c.get("lowest_price")),
+            "Highest Price":  ugx(c.get("max_price")),
+            "Lowest Price":   ugx(c.get("min_price")),
         } for c in comms])
         st.dataframe(df_ns, use_container_width=True, hide_index=True)
 
@@ -628,7 +628,7 @@ with tab4:
         if len(comms) >= 2:
             spread_data = [{
                 "Commodity": c["commodity"],
-                "Spread":    (c.get("highest_price") or 0) - (c.get("lowest_price") or 0),
+                "Spread":    (c.get("max_price") or 0) - (c.get("min_price") or 0),
                 "Avg":       c["national_avg_price"],
             } for c in comms]
             df_spread = pd.DataFrame(spread_data)
