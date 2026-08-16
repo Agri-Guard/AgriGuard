@@ -65,11 +65,10 @@ router = APIRouter(prefix="/markets", tags=["Markets"])
 DATA_PATH: str = os.environ.get(
     "AGRIGUARD_PRICE_DATA",
     os.path.join(
-        os.path.dirname(__file__), "..", "..", "data", "raw", "wfp_food_prices_uga.csv"
+        os.path.dirname(__file__), "..", "..", "..", "data", "raw", "wfp_food_prices_uga.csv"
     ),
 )
 
-# Number of recent observations used for trend calculation.
 # 12 bi-weekly WFP observations ≈ 6 months of data — enough to see a turn.
 TREND_WINDOW: int = 12
 
