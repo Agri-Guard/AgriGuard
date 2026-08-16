@@ -37,7 +37,7 @@ router = APIRouter(prefix="/ussd", tags=["USSD"])
 
 # ── Data Path ─────────────────────────────────────────────────────────────────
 DATA_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "data", "raw", "wfp_food_prices_uga.csv"
+    os.path.dirname(__file__), "..", "..", "..", "data", "raw", "wfp_food_prices_uga.csv"
 )
 
 # ── USSD constants ────────────────────────────────────────────────────────────
