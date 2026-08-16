@@ -116,13 +116,13 @@ python scripts/fetch_weather.py --no-forecast       # skip the 16-day forecast c
 
 ## Data quality
 
-`scripts/validate_data.py` exists as the intended place for schema/range
-checks on both datasets before training (e.g. price outlier bounds, date
-continuity, market/commodity whitelist checks) but is currently an empty
-stub — it's a real gap, not a hidden pipeline. Until it's implemented,
-`ml/training/*.py` and `backend/ml/train.py` are the only things that will
-notice a malformed row, and only implicitly (a crash or a silently bad
-model), not through an explicit validation report.
+`scripts/validate_data.py` runs schema/range checks on both datasets before
+training (price outlier bounds, date continuity, required-column checks,
+weather-file schema checks). It's implemented and passes on the committed
+datasets — run it with `python scripts/validate_data.py --weather-dir
+data/processed/weather`. `ml/training/*.py` and `backend/ml/train.py` will
+still only implicitly notice a malformed row (a crash or a silently bad
+model) if you skip this step first.
 
 ## What's git-ignored and why
 
