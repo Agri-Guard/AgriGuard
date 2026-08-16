@@ -1,15 +1,25 @@
 """
 AgriGuard — backend API tests.
 Run from repo root:  pytest tests/ -v
-Requires:  pip install pytest httpx
-Models don't need to be trained — tests mock model.py where needed.
+
+This file previously tested a different, older API shape (commodity/market/
+year/month payloads, /api/v1/forecasts/* routes, a "models" key on /health)
+that main.py and the routers no longer implement — every test in the old
+version was failing against the current, working API. Rewritten against
+what backend/app/main.py, routers/forecasts.py, and routers/markets.py
+actually expose today.
+
+/api/v1/predict tests mock backend.app.model.predict_price so they don't
+depend on a trained ml/models/*.pkl existing. The /forecasts and /markets
+tests hit the real endpoints against the committed
+data/raw/wfp_food_prices_uga.csv — that file is small and always present,
+so there's nothing worth mocking there.
 """
 
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 # ensure repo root is on path
@@ -23,22 +33,16 @@ client = TestClient(app)
 
 # ── fixtures ───────────────────────────────────────────────────────────────
 
+# Shape returned by backend.app.model.predict_price() — see model.py.
 MOCK_PREDICT_RESULT = {
     "commodity": "Maize",
     "market": "Kampala",
-    "year": 2025,
+    "year": 2026,
     "month": 8,
     "predicted_price_ugx": 1350.0,
     "lower_bound_ugx": 1215.0,
     "upper_bound_ugx": 1485.0,
     "currency": "UGX",
-}
-
-MOCK_STATUS = {
-    "price_model": True,
-    "encoders": True,
-    "data_file": True,
-    "metrics": {"price_model": {"r2": 0.87}},
 }
 
 
@@ -53,89 +57,112 @@ def test_root():
 
 
 def test_health():
-    with patch("backend.app.model.status", return_value=MOCK_STATUS):
-        r = client.get("/health")
+    r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert "models" in body
+    assert "ml_ready" in body
+    assert "validator_ready" in body
 
 
 # ── /api/v1/predict ────────────────────────────────────────────────────────
+# Schema is PricePredictionRequest{crop, region, date} — see schemas.py.
 
 def test_predict_success():
-    with patch("backend.app.model.predict_price", return_value=MOCK_PREDICT_RESULT):
+    # See test_predict_model_not_ready for why this patches
+    # backend.app.main.predict_price rather than backend.app.model.predict_price.
+    with patch("backend.app.main.predict_price", return_value=MOCK_PREDICT_RESULT):
         r = client.post("/api/v1/predict", json={
-            "commodity": "Maize",
-            "market": "Kampala",
-            "year": 2025,
-            "month": 8,
+            "crop": "Maize",
+            "region": "Kampala",
+            "date": "2026-08-01",
         })
     assert r.status_code == 200
     body = r.json()
-    assert body["commodity"] == "Maize"
+    assert body["crop"] == "Maize"
+    assert body["region"] == "Kampala"
     assert body["currency"] == "UGX"
-    assert "predicted_price_ugx" in body
+    assert "predicted_price" in body
+    assert body["recommendation"] in {"SELL", "HOLD", "STORE"}
 
 
-def test_predict_invalid_month():
-    r = client.post("/api/v1/predict", json={
-        "commodity": "Maize",
-        "market": "Kampala",
-        "year": 2025,
-        "month": 13,   # invalid
-    })
+def test_predict_missing_field_is_422():
+    # crop/region/date are all required — Pydantic itself rejects a
+    # missing field before validate_input() ever runs.
+    r = client.post("/api/v1/predict", json={"region": "Kampala", "date": "2026-08-01"})
     assert r.status_code == 422
+
+
+def test_predict_bad_date_format_is_400():
+    # A malformed (but present) date is a validate_input() failure, not a
+    # Pydantic one — crop/region/date are plain strings in the schema.
+    r = client.post("/api/v1/predict", json={
+        "crop": "Maize",
+        "region": "Kampala",
+        "date": "01-08-2026",  # wrong order, not YYYY-MM-DD
+    })
+    assert r.status_code == 400
+    assert "details" in r.json()
 
 
 def test_predict_model_not_ready():
     from backend.app.model import ModelNotReadyError
-    with patch("backend.app.model.predict_price",
+    # main.py does `from backend.app.model import predict_price` — that
+    # binds the name into backend.app.main's own namespace, so patching
+    # backend.app.model.predict_price (the origin) doesn't touch what
+    # main.py actually calls. Patch it where it's used instead.
+    with patch("backend.app.main.predict_price",
                side_effect=ModelNotReadyError("Model not loaded")):
         r = client.post("/api/v1/predict", json={
-            "commodity": "Maize",
-            "market": "Kampala",
-            "year": 2025,
-            "month": 6,
+            "crop": "Maize",
+            "region": "Kampala",
+            "date": "2026-08-01",
         })
     assert r.status_code == 503
 
 
-# ── /api/v1/forecasts ──────────────────────────────────────────────────────
+# ── /forecasts/* (no /api/v1 prefix — see routers/forecasts.py) ────────────
 
 def test_forecast_commodities():
-    with patch("backend.app.model.list_commodities",
-               return_value=["Maize", "Beans"]):
-        r = client.get("/api/v1/forecasts/commodities")
+    r = client.get("/forecasts/commodities")
+    assert r.status_code == 200
+    body = r.json()
+    assert "commodities" in body
+    assert "markets" in body
+    assert "Maize" in body["commodities"]
+
+
+def test_forecast_unknown_commodity_is_404():
+    r = client.get("/forecasts/NotACrop")
+    assert r.status_code == 404
+
+
+def test_forecast_history():
+    r = client.get("/forecasts/history/Maize", params={"market": "Kampala"})
+    assert r.status_code == 200
+    assert "history" in r.json()
+
+
+# ── /markets/* (no /api/v1 prefix — see routers/markets.py) ────────────────
+
+def test_market_summary():
+    r = client.get("/markets/summary/Maize")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["commodity"] == "Maize"
+    assert "best_market_to_sell" in body
+    assert "national_avg_price" in body
+
+
+def test_national_summary():
+    r = client.get("/markets/national-summary")
     assert r.status_code == 200
     assert "commodities" in r.json()
 
 
-def test_forecast_markets():
-    with patch("backend.app.model.list_markets",
-               return_value=["Kampala", "Gulu"]):
-        r = client.get("/api/v1/forecasts/markets")
+def test_top_movers():
+    r = client.get("/markets/movers")
     assert r.status_code == 200
-    assert "markets" in r.json()
-
-
-def test_forecast_model_not_ready():
-    with patch("backend.app.model.status",
-               return_value={**MOCK_STATUS, "price_model": False}):
-        r = client.get("/api/v1/forecasts/Maize/Kampala?horizon=3")
-    assert r.status_code == 503
-
-
-# ── schema validation ──────────────────────────────────────────────────────
-
-def test_predict_request_normalises_case():
-    """commodity and market should be title-cased by the validator."""
-    with patch("backend.app.model.predict_price", return_value=MOCK_PREDICT_RESULT):
-        r = client.post("/api/v1/predict", json={
-            "commodity": "maize",      # lowercase
-            "market":    "kampala",
-            "year": 2025,
-            "month": 6,
-        })
-    # either 200 (model mock worked) or 422 (schema validation — both fine here)
-    assert r.status_code in (200, 422, 503)
+    body = r.json()
+    assert "gainers" in body
+    assert "losers" in body
