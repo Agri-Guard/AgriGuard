@@ -6,17 +6,17 @@ ModelNotReadyError (HTTP 503) instead of crashing if pkl files are absent.
 
 import os
 import json
-import pickle
 import logging
 from pathlib import Path
 from typing import Any, Optional
 
+import joblib
 import numpy as np
 import pandas as pd
 
 log = logging.getLogger(__name__)
 
-ROOT      = Path(__file__).resolve().parents[3]
+ROOT      = Path(__file__).resolve().parents[2]
 MODEL_DIR = Path(os.getenv("MODEL_DIR", str(ROOT / "ml" / "models")))
 DATA_FILE = Path(
     os.getenv("AGRIGUARD_PRICE_DATA",
@@ -36,8 +36,13 @@ def _load_pkl(name: str) -> Optional[Any]:
         log.warning(f"Model file missing: {p}  — run scripts/train_models.py")
         return None
     try:
-        with open(p, "rb") as f:
-            return pickle.load(f)
+        # scripts/train_models.py saves artifacts with joblib.dump(...,
+        # compress=3) — that's a zlib-compressed pickle stream, which raw
+        # pickle.load() can't parse ("invalid load key" errors). joblib.load
+        # handles both compressed and uncompressed pickles transparently,
+        # so it's the correct counterpart regardless of the compress level
+        # a given training run used.
+        return joblib.load(p)
     except Exception as e:
         log.error(f"Failed to load {p}: {e}")
         return None
