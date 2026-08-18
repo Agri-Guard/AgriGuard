@@ -24,26 +24,34 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, and_, desc, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.config import Settings
-from app.models.price import (
+# NOTE (scoped fix, see backend/app/main.py and README "Known issues"):
+# this file originally imported from a nonexistent top-level `app` package.
+# The weather-specific pieces of that were blocking WeatherReading from
+# ever being usable here, so those two lines are corrected to the
+# `backend.app.*` root that actually resolves given this repo's real
+# WORKDIR/PYTHONPATH (see backend/Dockerfile). `PriceForecast` and the
+# schema names below (MarketComparisonItem, PriceTrendPoint) still don't
+# exist under those exact names in schemas/price.py — that mismatch predates
+# this pass and is a price/forecast-layer issue, not a weather one, so it's
+# left as-is rather than silently papered over. This file still can't be
+# imported end-to-end until that's reconciled.
+from backend.app.core.config import Settings
+from backend.app.models.price import (
     Crop,
     CropPrice,
     DataQuality,
     Market,
-    PriceForecast,
     PriceUnit,
     UgandaRegion,
-    WeatherReading,
 )
-from app.schemas.price import (
+from backend.app.models.weather import WeatherReading
+from backend.app.schemas.price import (
     CropPriceCreate,
     CropPriceUpdate,
     CropSummary,
-    MarketComparisonItem,
     MarketComparisonResponse,
     MarketSummary,
     PriceFilterParams,
-    PriceTrendPoint,
     PriceTrendResponse,
 )
 
