@@ -4,6 +4,7 @@ AgriGuard MVP FastAPI Entry Point
 
 Purpose:
 - Serve crop price predictions and conveyance
+- Validate farmer inputs
 - Provide stable API for Streamlit frontend
 
 Design principle:
@@ -17,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.app.core.config import settings
+from backend.app.database import create_tables
+from backend.app import models as _models  # noqa: F401 — registers ORM models on Base.metadata (incl. WeatherReading) before create_tables() runs below
 from backend.app.schemas import (
     PricePredictionRequest,
     PricePredictionResponse,
@@ -28,12 +31,21 @@ from backend.app.model import predict_price, ModelNotReadyError
 from backend.app.routers.forecasts import router as forecasts_router
 from backend.app.routers.markets import router as markets_router
 from backend.app.routers.ussd import router as ussd_router
+from backend.app.routers.weather import router as weather_router
 
 # NOTE: routers/prices.py is intentionally NOT wired in yet. It depends on a
 # separate, still-broken layer (app/database.py, app/services/price_service.py,
 # app/models/price.py) that imports a nonexistent top-level `app` package and
-# assumes a MySQL service this docker-compose doesn't define. That's a
+# assumes a Postgres service this docker-compose doesn't define. That's a
 # bigger fix than this pass covers — see README "Known issues".
+#
+# routers/weather.py is DIFFERENT: it (and weather_service.py, models/weather.py,
+# schemas/weather.py) only ever import via the `backend.app.*` root — the
+# convention that already works given this repo's actual WORKDIR/PYTHONPATH
+# (see backend/Dockerfile, docker-compose.yml: PYTHONPATH=/app,
+# `uvicorn backend.app.main:app`). It also only needs `backend/app/database.py`,
+# which happily falls back to SQLite — no Postgres/MySQL dependency. So unlike
+# prices, it's safe to wire in as-is.
 
 
 # =============================================================================
@@ -51,6 +63,21 @@ app = FastAPI(
 app.include_router(forecasts_router)
 app.include_router(markets_router)
 app.include_router(ussd_router)
+app.include_router(weather_router)
+
+
+# =============================================================================
+# STARTUP — ensure the weather tables exist on a fresh SQLite dev DB
+# =============================================================================
+# markets/forecasts/ussd are pure-CSV routers (see their imports) — weather
+# is the first wired-in router that actually touches the DB, so nothing
+# before it needed this. create_all() is idempotent (CREATE TABLE IF NOT
+# EXISTS semantics), so this is safe to run on every startup, including
+# against an already-migrated Postgres/MySQL DB in production — it no-ops
+# there too.
+@app.on_event("startup")
+def on_startup() -> None:
+    create_tables()
 
 
 # =============================================================================
