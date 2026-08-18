@@ -58,8 +58,15 @@ warnings.filterwarnings("ignore")   # Suppress sklearn/xgboost verbose warnings
 # Add backend/ to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.config import settings
-from app.models.price import Crop, CropPrice, DataQuality, Market, WeatherReading
+# Fixed: was `from app.config` / `from app.models.price` — a nonexistent
+# top-level `app` package (see README "Known issues"; the real root is
+# `backend.app`, matching how this repo actually runs — see
+# backend/Dockerfile / docker-compose.yml). WeatherReading now also exists
+# (backend/app/models/weather.py) — until both fixes, this script's whole
+# weather-feature branch (load_weather_data / build_features) was dead code.
+from backend.app.core.config import settings
+from backend.app.models.price import Crop, CropPrice, DataQuality, Market
+from backend.app.models.weather import WeatherReading
 
 # =============================================================================
 # PATHS
