@@ -122,6 +122,11 @@ class Market(Base):
 
     # Relationships
     prices        = relationship("CropPrice", back_populates="market", lazy="dynamic")
+    # Weather readings for this market (backend/app/models/weather.py).
+    # Import backend.app.models.weather somewhere before create_tables() /
+    # any query touches this — see backend/app/models/__init__.py — or
+    # SQLAlchemy won't have resolved the "WeatherReading" string yet.
+    weather_readings = relationship("WeatherReading", back_populates="market", lazy="dynamic")
 
     def __repr__(self):
         return f"<Market id={self.id} name={self.name} region={self.region}>"
