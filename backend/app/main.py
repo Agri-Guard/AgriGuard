@@ -32,20 +32,19 @@ from backend.app.routers.forecasts import router as forecasts_router
 from backend.app.routers.markets import router as markets_router
 from backend.app.routers.ussd import router as ussd_router
 from backend.app.routers.weather import router as weather_router
+from backend.app.routers.prices import router as prices_router
 
-# NOTE: routers/prices.py is intentionally NOT wired in yet. It depends on a
-# separate, still-broken layer (app/database.py, app/services/price_service.py,
-# app/models/price.py) that imports a nonexistent top-level `app` package and
-# assumes a Postgres service this docker-compose doesn't define. That's a
-# bigger fix than this pass covers — see README "Known issues".
-#
-# routers/weather.py is DIFFERENT: it (and weather_service.py, models/weather.py,
-# schemas/weather.py) only ever import via the `backend.app.*` root — the
-# convention that already works given this repo's actual WORKDIR/PYTHONPATH
-# (see backend/Dockerfile, docker-compose.yml: PYTHONPATH=/app,
-# `uvicorn backend.app.main:app`). It also only needs `backend/app/database.py`,
-# which happily falls back to SQLite — no Postgres/MySQL dependency. So unlike
-# prices, it's safe to wire in as-is.
+# routers/prices.py was previously NOT wired in: it imported a nonexistent
+# top-level `app` package (fixed — now uses `backend.app.*` like every other
+# router), and separately depended on backend/app/schemas/price.py, which was
+# unimportable regardless of import root because a flat backend/app/schemas.py
+# sitting next to the backend/app/schemas/ package shadowed it (fixed — that
+# file's content moved into backend/app/schemas/__init__.py so schemas.price
+# and schemas.weather are real submodules now). No Postgres dependency either:
+# database.py's settings.database_url defaults to SQLite, same as weather.py.
+# See ml/README.md-equivalent history in this file's git log / commit
+# messages for the full trail; routers/weather.py's comment above this one
+# is now stale and has been folded into this note.
 
 
 # =============================================================================
@@ -64,6 +63,7 @@ app.include_router(forecasts_router)
 app.include_router(markets_router)
 app.include_router(ussd_router)
 app.include_router(weather_router)
+app.include_router(prices_router)
 
 
 # =============================================================================
