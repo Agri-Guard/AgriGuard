@@ -32,6 +32,21 @@ export interface CommodityListResponse {
   total_observations: number;
 }
 
+/** Mirrors backend/app/routers/markets.py::ArbitrageOpportunity exactly. */
+export interface ArbitrageOpportunity {
+  commodity: string;
+  buy_market: string;
+  sell_market: string;
+  buy_price: number;
+  sell_price: number;
+  gross_margin: number;
+  gross_margin_pct: number;
+  currency: string;
+  unit: string;
+  viable: boolean;
+  note: string;
+}
+
 export class AgriGuardApi {
   constructor(private baseURL: string) {}
 
@@ -65,5 +80,25 @@ export class AgriGuardApi {
 
   marketSummary(commodity: string): Promise<Record<string, unknown>> {
     return this.get(`/markets/summary/${encodeURIComponent(commodity)}`);
+  }
+
+  /**
+   * GET /markets/arbitrage/{commodity} — buy/sell market pairs with a gross
+   * margin above minMarginPct, ranked biggest first. Throws (via get()'s
+   * HTTP ${status} error) on the backend's two expected non-200 outcomes —
+   * 404 when nothing clears the threshold, 422 when fewer than 2 requested
+   * markets have data — so callers should inspect the thrown Error's
+   * message for "404"/"422" rather than treating every rejection the same
+   * way (see Dashboard.tsx for the pattern).
+   */
+  arbitrageOpportunities(
+    commodity: string,
+    minMarginPct = 10,
+    markets = "Kampala,Mbarara,Gulu,Kabale,Jinja,Mbale"
+  ): Promise<ArbitrageOpportunity[]> {
+    return this.get(`/markets/arbitrage/${encodeURIComponent(commodity)}`, {
+      min_margin_pct: minMarginPct,
+      markets,
+    });
   }
 }
