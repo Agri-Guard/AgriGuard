@@ -1,4 +1,14 @@
 # backend/app/services/forecast_service.py
+#
+# NOTE: not currently wired into the running app — backend/app/main.py uses
+# backend.app.model.predict_price() + backend.app.routers.forecasts directly
+# and never imports this module or the package-level ForecastService it's
+# re-exported as (see services/__init__.py). It previously imported a
+# top-level `app.config` module that doesn't exist anywhere in this repo
+# (the real settings live at backend.app.core.config, and this class never
+# actually used `settings` once imported) — that import error meant
+# `import backend.app.services` crashed outright. Fixed here so the package
+# is at least importable; still unused by the live API.
 
 import pandas as pd
 import numpy as np
@@ -8,8 +18,6 @@ from prophet import Prophet
 import joblib
 import os
 from pathlib import Path
-
-from app.config import settings  # Adjust import based on your final config structure
 
 
 class ForecastService:
