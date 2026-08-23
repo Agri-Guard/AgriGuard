@@ -1,6 +1,12 @@
 """
 Shared feature engineering for AgriGuard price models.
-Imported by scripts/train_models.py and any notebook that needs it.
+
+STATUS: not actually imported by scripts/train_models.py -- that script
+has its own inline feature engineering instead (a historical drift from
+whenever this was split out; the two haven't been reconciled). Currently
+unused by any committed script; kept around for notebook use and as a
+starting point if scripts/train_models.py is ever refactored to use it.
+See ml/README.md for how this fits into the wider pipeline picture.
 """
 
 import numpy as np
