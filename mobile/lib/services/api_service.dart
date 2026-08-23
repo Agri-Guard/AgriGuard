@@ -18,6 +18,17 @@ class ApiService {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Same as [_get], for endpoints whose response body is a bare JSON array
+  /// rather than an object (e.g. GET /markets/arbitrage/{commodity}).
+  Future<List<dynamic>> _getList(String path, [Map<String, String>? query]) async {
+    final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
+    final res = await http.get(uri).timeout(const Duration(seconds: 25));
+    if (res.statusCode >= 400) {
+      throw ApiException(res.statusCode, res.body);
+    }
+    return jsonDecode(res.body) as List<dynamic>;
+  }
+
   Future<bool> health() async {
     try {
       final data = await _get('/health');
@@ -81,6 +92,27 @@ class ApiService {
 
   Future<Map<String, dynamic>> nationalSummary() async {
     return _get('/markets/national-summary');
+  }
+
+  /// GET /markets/arbitrage/{commodity} — every buy/sell market pair with a
+  /// gross margin above [minMarginPct], sorted biggest opportunity first.
+  /// The backend raises 404 when nothing clears the threshold and 422 when
+  /// fewer than 2 of the requested markets have price data — both are
+  /// expected outcomes here, not failures, so callers should check for
+  /// those status codes on the thrown [ApiException] rather than treating
+  /// every error the same way (see market_screen.dart for the pattern).
+  Future<List<ArbitrageOpportunity>> arbitrageOpportunities({
+    required String commodity,
+    String markets = 'Kampala,Mbarara,Gulu,Kabale,Jinja,Mbale',
+    double minMarginPct = 10.0,
+  }) async {
+    final data = await _getList(
+      '/markets/arbitrage/${Uri.encodeComponent(commodity)}',
+      {'markets': markets, 'min_margin_pct': '$minMarginPct'},
+    );
+    return data
+        .map((e) => ArbitrageOpportunity.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 }
 
