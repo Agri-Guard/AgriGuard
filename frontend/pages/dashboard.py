@@ -606,6 +606,63 @@ with tab3:
                 mc2.metric("Cheapest to buy", worst["Market"],
                            delta=f"UGX {worst['Price (UGX)']:,.0f}")
 
+    st.divider()
+
+    # ── Arbitrage opportunities ──────────────────────────────────────────
+    # GET /markets/arbitrage/{commodity} — the backend already computes every
+    # buy/sell market pair's gross margin and a viability call (margins under
+    # ~20% are usually eaten by transport cost). That's a fuller, more
+    # actionable calculation than the "best vs. worst market" metric above,
+    # which only compares two markets and says nothing about whether the gap
+    # is worth the trip — so it gets its own section rather than folding into
+    # the chart above.
+    st.markdown(f"#### 💰 Arbitrage Opportunities — {crop}")
+    st.caption(
+        "Buy-low / sell-high pairs across markets. Gross margin only — "
+        "always weigh it against actual transport cost before acting."
+    )
+
+    arb_c1, arb_c2 = st.columns([2, 1])
+    with arb_c2:
+        min_margin = st.slider("Minimum margin %", 5, 50, 10, key="arb_min_margin")
+
+    arb_data, arb_err = api(
+        "GET",
+        f"/markets/arbitrage/{crop}?min_margin_pct={min_margin}",
+        base_url,
+    )
+
+    if arb_err and arb_err.startswith("HTTP 404"):
+        st.info(f"No {crop} arbitrage pairs above {min_margin}% margin right now — try lowering the threshold.")
+    elif arb_err and arb_err.startswith("HTTP 422"):
+        st.warning(f"Not enough {crop} price data across markets yet to compute arbitrage.")
+    elif arb_err:
+        st.error(arb_err)
+    elif arb_data:
+        with arb_c1:
+            top = arb_data[0]
+            st.markdown(
+                f'<div class="alert-low">🏆 <b>Best opportunity:</b> buy in '
+                f'<b>{top["buy_market"]}</b> ({ugx(top["buy_price"])}), sell in '
+                f'<b>{top["sell_market"]}</b> ({ugx(top["sell_price"])}) — '
+                f'<b>+{top["gross_margin_pct"]:.1f}%</b> gross margin.</div>',
+                unsafe_allow_html=True,
+            )
+
+        df_arb = pd.DataFrame([{
+            "Buy in":     o["buy_market"],
+            "Sell in":    o["sell_market"],
+            "Buy price":  ugx(o["buy_price"]),
+            "Sell price": ugx(o["sell_price"]),
+            "Margin":     f'{o["gross_margin_pct"]:.1f}%',
+            "Viable?":    "✅ Likely" if o["viable"] else "⚠️ Check transport cost",
+        } for o in arb_data[:10]])
+        st.dataframe(df_arb, use_container_width=True, hide_index=True)
+
+        with st.expander("📋 Advisory notes"):
+            for o in arb_data[:10]:
+                st.markdown(f"- **{o['buy_market']} → {o['sell_market']}** ({o['gross_margin_pct']:.1f}%): {o['note']}")
+
 # ══════════════════════════════════════════════
 # TAB 4 — NATIONAL OVERVIEW
 # ══════════════════════════════════════════════
