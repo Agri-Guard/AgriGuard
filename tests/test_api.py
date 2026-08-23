@@ -66,7 +66,7 @@ def test_health():
 
 
 # ── /api/v1/predict ────────────────────────────────────────────────────────
-# Schema is PricePredictionRequest{crop, region, date} — see schemas.py.
+# Schema is PricePredictionRequest{crop, region, date} — see backend/app/schemas/__init__.py.
 
 def test_predict_success():
     # See test_predict_model_not_ready for why this patches
