@@ -19,9 +19,10 @@ Design principles (matching routers/prices.py):
   - Every endpoint has response_model so FastAPI auto-generates docs
   - Pagination on the list endpoint
 
-Unlike routers/prices.py, this router only depends on modules that use
-the working `backend.app.*` import root (database.py, models/price.py) —
-see backend/app/main.py for why that matters and what's still deferred.
+Unlike routers/prices.py used to be, this router only ever imported via
+the working `backend.app.*` root — see backend/app/main.py for the fuller
+history (prices.py's own import root has since been fixed too, and both
+are wired in now).
 
 Author: AgriGuard Team
 """
