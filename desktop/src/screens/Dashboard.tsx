@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { AgriGuardApi, ForecastResponse, CommodityListResponse, ForecastPoint } from "../services/apiClient";
+import {
+  AgriGuardApi,
+  ForecastResponse,
+  CommodityListResponse,
+  ForecastPoint,
+  ArbitrageOpportunity,
+} from "../services/apiClient";
 
 interface DashboardProps {
   apiBase: string;
@@ -141,6 +147,8 @@ export default function Dashboard({ apiBase }: DashboardProps) {
 
   const [forecast, setForecast] = useState<ForecastResponse | null>(null);
   const [summary, setSummary] = useState<CommodityMarketSummary | null>(null);
+  const [arbitrage, setArbitrage] = useState<ArbitrageOpportunity[] | null>(null);
+  const [arbitrageNotice, setArbitrageNotice] = useState<string | null>(null);
   const [status, setStatus] = useState<LoadStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -180,6 +188,7 @@ export default function Dashboard({ apiBase }: DashboardProps) {
   async function runForecast() {
     setStatus("loading");
     setError(null);
+    setArbitrageNotice(null);
     try {
       const [fc, sm] = await Promise.all([
         api.getForecast(commodity, market, horizon),
@@ -196,6 +205,25 @@ export default function Dashboard({ apiBase }: DashboardProps) {
       setSummary(null);
       setError(err instanceof Error ? err.message : "Failed to fetch forecast");
       setStatus("error");
+    }
+
+    // Arbitrage is supplementary — fetched independently so a 404/422 (both
+    // expected outcomes, see arbitrageOpportunities() docs) never blanks the
+    // forecast/summary above, and gets its own notice text instead of the
+    // shared error banner.
+    try {
+      const arb = await api.arbitrageOpportunities(commodity);
+      setArbitrage(arb);
+    } catch (err) {
+      setArbitrage(null);
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("404")) {
+        setArbitrageNotice(`No strong arbitrage opportunities for ${commodity} right now.`);
+      } else if (msg.includes("422")) {
+        setArbitrageNotice(`Not enough ${commodity} price data across markets yet.`);
+      } else {
+        setArbitrageNotice("Could not load arbitrage data.");
+      }
     }
   }
 
@@ -426,6 +454,52 @@ export default function Dashboard({ apiBase }: DashboardProps) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Arbitrage — every buy/sell market pair above the margin threshold,
+          ranked biggest first. More actionable than the best/worst-market
+          fields on `summary` above: those only compare two markets, this
+          shows every pair worth considering plus a viability call and a
+          transport-cost caveat per pair, straight from the backend. */}
+      {arbitrage && arbitrage.length > 0 && (
+        <div style={card}>
+          <h3 style={{ marginTop: 0 }}>Arbitrage opportunities — {commodity}</h3>
+          <p style={{ color: "#777", fontSize: 13, marginTop: -8 }}>
+            Gross margin only — always weigh it against actual transport cost.
+          </p>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
+                <th style={{ padding: "6px 8px" }}>Buy in</th>
+                <th style={{ padding: "6px 8px" }}>Sell in</th>
+                <th style={{ padding: "6px 8px" }}>Margin</th>
+                <th style={{ padding: "6px 8px" }}>Viable?</th>
+                <th style={{ padding: "6px 8px" }}>Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {arbitrage.slice(0, 5).map((o) => (
+                <tr key={`${o.buy_market}-${o.sell_market}`} style={{ borderBottom: "1px solid #f4f4f4" }}>
+                  <td style={{ padding: "6px 8px" }}>
+                    {o.buy_market} ({formatMoney(o.buy_price, o.currency, o.unit)})
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>
+                    {o.sell_market} ({formatMoney(o.sell_price, o.currency, o.unit)})
+                  </td>
+                  <td style={{ padding: "6px 8px", fontWeight: 700, color: o.viable ? "#2e7d32" : "#e65100" }}>
+                    +{o.gross_margin_pct.toFixed(1)}%
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>{o.viable ? "✅ Likely" : "⚠️ Check transport"}</td>
+                  <td style={{ padding: "6px 8px", color: "#777" }}>{o.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {arbitrageNotice && (
+        <div style={{ ...card, color: "#777", fontSize: 13 }}>{arbitrageNotice}</div>
       )}
 
       {status === "loading" && !forecast && <div style={card}>Loading forecast…</div>}
