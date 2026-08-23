@@ -22,6 +22,16 @@ Design principles:
   - Every endpoint has response_model so FastAPI auto-generates docs
   - Pagination on all list endpoints (MAAIF has years of price data)
 
+Import root fixed to `backend.app.*` (previously `app.*`, a top-level
+package that doesn't exist anywhere in this repo — every import below
+would have raised ModuleNotFoundError). This also depended on
+`backend/app/schemas/price.py`, which briefly had its own unrelated
+issue: it lived alongside a flat `backend/app/schemas.py` that shadowed
+it as a Python import target, making `backend.app.schemas.price`
+unimportable regardless of which root you used. Both are fixed now
+(see backend/app/schemas/__init__.py and backend/app/main.py's router
+notes), so this router is wired into main.py below the /prices prefix.
+
 Author: AgriGuard Team
 """
 
@@ -31,10 +41,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.config import get_settings, Settings
-from app.database import get_db          # DB session dependency (defined below)
-from app.models.price import DataQuality, PriceUnit, UgandaRegion
-from app.schemas.price import (
+from backend.app.core.config import Settings, settings as _settings
+from backend.app.database import get_db
+from backend.app.models.price import DataQuality, PriceUnit, UgandaRegion
+from backend.app.schemas.price import (
     CropPriceCreate,
     CropPriceResponse,
     CropPriceSummary,
@@ -44,7 +54,7 @@ from app.schemas.price import (
     PriceFilterParams,
     PriceTrendResponse,
 )
-from app.services.price_service import PriceService
+from backend.app.services.price_service import PriceService
 
 # =============================================================================
 # ROUTER SETUP
@@ -62,10 +72,19 @@ router = APIRouter(
 
 
 # =============================================================================
-# DEPENDENCY: DB Session
-# Injected into every endpoint that needs database access.
-# Defined here for reference — move to app/database.py in production.
+# DEPENDENCIES
 # =============================================================================
+
+def get_settings() -> Settings:
+    """
+    core/config.py exposes a module-level `settings` singleton rather than
+    a factory function — this wraps it so the endpoint signatures below can
+    still use FastAPI's `Depends(get_settings)` pattern for testability
+    (a test can override this dependency to inject different settings).
+    Mirrors routers/weather.py's identical wrapper.
+    """
+    return _settings
+
 
 def get_price_service(
     db: Session = Depends(get_db),
