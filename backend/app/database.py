@@ -1,7 +1,13 @@
 """
 backend/app/database.py
 Database connection and session management for AgriGuard.
-This file connects SQLAlchemy to MySQL.
+
+Dialect-agnostic via settings.database_url (see core/config.py) — defaults
+to a local SQLite file for dev, override with DATABASE_URL for Postgres/
+MySQL/etc. (This docstring previously said "connects SQLAlchemy to MySQL"
+specifically; that hasn't been true since database_url became
+settings-driven, and both prices.py and weather.py rely on the SQLite
+default working out of the box.)
 """
 
 from sqlalchemy import create_engine
