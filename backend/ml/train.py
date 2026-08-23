@@ -2,10 +2,15 @@
 CLI entry point: trains the price forecaster from the WFP CSV, saves
 .pkl artifacts to ml/models/, and writes ml/models/metrics.json.
 
-This replaces the top-level scripts/train_models.py referenced in the
-README with a version that lives next to the model code it trains,
-so features/config/models can't drift out of sync with the script
-that produces them.
+STATUS: not currently wired into the running API. This was written to
+replace scripts/train_models.py (same data in, cleaner code living next
+to the model class it trains), but backend/app/model.py -- the module the
+FastAPI app actually loads its model from at request time -- still reads
+scripts/train_models.py's output artifacts (ml/models/price_forecast_model.pkl
++ encoders.pkl), not this file's (ml/models/price_forecast_xgb.pkl, saved as
+a single combined dict via PriceForecastModel.save()). Until backend/app/model.py
+is repointed at this output, running this script has no effect on the live
+API -- see ml/README.md for the full pipeline map and status of each one.
 
 Run from repo root:
     python -m backend.ml.train
