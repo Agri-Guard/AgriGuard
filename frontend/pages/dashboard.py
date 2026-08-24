@@ -84,7 +84,7 @@ def api(method: str, path: str, base: str, **kwargs):
     """Thin wrapper — returns (data_or_None, error_str_or_None)."""
     url = f"{base.rstrip('/')}{path}"
     try:
-        r = requests.request(method, url, timeout=15, **kwargs)
+        r = requests.request(method, url, timeout=60, **kwargs)
         if r.status_code in (200, 201):
             return r.json(), None
         return None, f"HTTP {r.status_code}: {r.text[:200]}"
@@ -535,9 +535,9 @@ with tab1:
             pd_.metric("Confidence",      f"{pred_data.get('confidence', 0)*100:.0f}%")
 
 # ══════════════════════════════════════════════
-# TAB 3 — MARKET INTELLIGENCE
+# TAB 2 — MARKET INTELLIGENCE
 # ══════════════════════════════════════════════
-with tab3:
+with tab2:
     st.subheader("📊 Market Intelligence")
 
     mi_c1, mi_c2 = st.columns(2)
@@ -664,9 +664,9 @@ with tab3:
                 st.markdown(f"- **{o['buy_market']} → {o['sell_market']}** ({o['gross_margin_pct']:.1f}%): {o['note']}")
 
 # ══════════════════════════════════════════════
-# TAB 4 — NATIONAL OVERVIEW
+# TAB 3 — NATIONAL OVERVIEW
 # ══════════════════════════════════════════════
-with tab4:
+with tab3:
     st.subheader("🗺️ National Overview")
 
     if ns_data and ns_data.get("commodities"):
@@ -715,9 +715,9 @@ with tab4:
         st.info("📊 National summary unavailable — start the backend to see this view.")
 
 # ══════════════════════════════════════════════
-# TAB 5 — WEATHER INSIGHTS
+# TAB 4 — WEATHER INSIGHTS
 # ══════════════════════════════════════════════
-with tab5:
+with tab4:
     st.subheader(f"🌦️ Weather Insights: **{crop}** in **{market}**")
     st.caption(
         "Live 7-day forecast from Open-Meteo (free, no key needed) "
