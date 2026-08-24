@@ -3,6 +3,13 @@
 Download WFP food price data for Uganda.
 Falls back to generating realistic synthetic data if the API is unavailable.
 Run from repo root: python scripts/download_wfp_data.py
+
+For keeping this file current after the initial download, see
+backend/app/services/wfp_sync.py — the FastAPI backend polls HDX's
+lightweight metadata endpoint on a schedule (default: every 6h, see
+WFP_SYNC_INTERVAL_HOURS) and only re-downloads the CSV when it actually
+changed, rather than needing this script re-run by hand. This script is
+just the one-time bootstrap for a fresh checkout / empty data/raw/.
 """
 
 import os
@@ -22,15 +29,15 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "data" / "raw"
 OUT_FILE = OUT_DIR / "wfp_food_prices_uga.csv"
 
-# ── WFP HDX / VAM API ─────────────────────────────────────────────────────────
-HDX_URL = (
-    "https://data.humdata.org/datastore/odata.svc/"
-    "b4cceb74-a026-4e86-8aed-dbdd3e7c2e75"
-    "?$format=json&$top=10000"
-)
-ALT_CSV_URL = (
-    "https://raw.githubusercontent.com/datasets/global-food-prices/main/"
-    "data/wfp_food_prices_uga.csv"
+# ── WFP / HDX source ─────────────────────────────────────────────────────────
+# "Uganda - Food Prices" on the Humanitarian Data Exchange — the same
+# dataset/resource IDs used by services/wfp_sync.py for ongoing syncing.
+# Confirmed against https://data.humdata.org/dataset/wfp-food-prices-for-uganda
+HDX_PACKAGE_ID = "883929b1-521e-4834-97f5-0ccc2df75b89"
+HDX_RESOURCE_ID = "e082d683-cad5-4dcd-bf54-db76ae254d33"
+HDX_CSV_URL = (
+    f"https://data.humdata.org/dataset/{HDX_PACKAGE_ID}/resource/"
+    f"{HDX_RESOURCE_ID}/download/wfp_food_prices_uga.csv"
 )
 
 UGANDA_MARKETS = [
@@ -50,36 +57,18 @@ COMMODITIES = {
 
 
 def try_hdx_download() -> bool:
-    """Attempt to pull data from HDX ODATA endpoint."""
-    log.info("Trying HDX ODATA endpoint …")
+    """Download the WFP Uganda CSV directly from its HDX resource URL."""
+    log.info("Trying HDX resource download …")
     try:
-        r = requests.get(HDX_URL, timeout=30)
-        r.raise_for_status()
-        records = r.json().get("value", [])
-        if not records:
-            return False
-        df = pd.DataFrame(records)
-        df.to_csv(OUT_FILE, index=False)
-        log.info(f"  ✓ HDX: {len(df):,} rows → {OUT_FILE}")
-        return True
-    except Exception as e:
-        log.warning(f"  HDX failed: {e}")
-        return False
-
-
-def try_csv_download() -> bool:
-    """Attempt to pull the pre-packaged CSV from GitHub datasets."""
-    log.info("Trying CSV mirror …")
-    try:
-        r = requests.get(ALT_CSV_URL, timeout=30)
+        r = requests.get(HDX_CSV_URL, timeout=30)
         r.raise_for_status()
         with open(OUT_FILE, "wb") as f:
             f.write(r.content)
-        df = pd.read_csv(OUT_FILE)
-        log.info(f"  ✓ CSV mirror: {len(df):,} rows → {OUT_FILE}")
+        df = pd.read_csv(OUT_FILE, low_memory=False)
+        log.info(f"  ✓ HDX: {len(df):,} rows → {OUT_FILE}")
         return True
     except Exception as e:
-        log.warning(f"  CSV mirror failed: {e}")
+        log.warning(f"  HDX download failed: {e}")
         return False
 
 
@@ -161,9 +150,9 @@ def main() -> None:
         validate_output()
         return
 
-    success = try_hdx_download() or try_csv_download()
+    success = try_hdx_download()
     if not success:
-        log.warning("All download sources failed — using synthetic data.")
+        log.warning("HDX download failed — using synthetic data.")
         generate_synthetic_data()
 
     validate_output()
