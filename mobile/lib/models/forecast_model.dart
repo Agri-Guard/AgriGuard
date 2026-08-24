@@ -1,231 +1,131 @@
-/// Data classes mirroring the AgriGuard FastAPI market-intelligence schemas
-/// (backend/app/routers/markets.py). Field names below are the camelCase
+/// Data classes mirroring the AgriGuard FastAPI forecasting schemas
+/// (backend/app/routers/forecasts.py). Field names below are the camelCase
 /// Dart-side names; `fromJson` maps them from the snake_case JSON keys the
-/// backend actually returns — keep these in sync with markets.py if its
+/// backend actually returns — keep these in sync with forecasts.py if its
 /// Pydantic models change.
 
-class MarketPrice {
+/// A single predicted price point on the forecast horizon.
+/// Mirrors routers/forecasts.py::ForecastPoint.
+class ForecastPoint {
+  final String date;
+  final double predictedPrice;
+  final double lowerBound; // Lower edge of 90% prediction interval
+  final double upperBound; // Upper edge of 90% prediction interval
+  final double confidence; // Clamped to [0.0, 1.0]
+
+  ForecastPoint({
+    required this.date,
+    required this.predictedPrice,
+    required this.lowerBound,
+    required this.upperBound,
+    required this.confidence,
+  });
+
+  factory ForecastPoint.fromJson(Map<String, dynamic> json) {
+    return ForecastPoint(
+      date: json['date'] as String,
+      predictedPrice: (json['predicted_price'] as num).toDouble(),
+      lowerBound: (json['lower_bound'] as num).toDouble(),
+      upperBound: (json['upper_bound'] as num).toDouble(),
+      confidence: (json['confidence'] as num).toDouble(),
+    );
+  }
+}
+
+/// Full forecast for one commodity x market combination.
+/// Mirrors routers/forecasts.py::ForecastResponse.
+class ForecastResponse {
+  final String commodity;
   final String market;
-  final String? region;
-  final double latestPrice;
   final String currency;
   final String unit;
-  final String dateRecorded;
-  final int daysSinceUpdate;
-  final double? price30dAgo;
-  final double? priceChangePct;
+  final int horizonDays;
+  final int observationsUsed;
+  final List<ForecastPoint> forecast;
   final String trend; // "rising" | "falling" | "stable"
-  final int dataPoints;
+  final double pctChange;
+  final String? alert;
+  final String modelUsed; // "prophet" | "prophet+xgb" | "linear"
+  final String generatedAt;
 
-  MarketPrice({
+  ForecastResponse({
+    required this.commodity,
     required this.market,
-    this.region,
-    required this.latestPrice,
     required this.currency,
     required this.unit,
-    required this.dateRecorded,
-    required this.daysSinceUpdate,
-    this.price30dAgo,
-    this.priceChangePct,
+    required this.horizonDays,
+    required this.observationsUsed,
+    required this.forecast,
     required this.trend,
-    required this.dataPoints,
+    required this.pctChange,
+    this.alert,
+    required this.modelUsed,
+    required this.generatedAt,
   });
 
-  factory MarketPrice.fromJson(Map<String, dynamic> json) {
-    return MarketPrice(
+  factory ForecastResponse.fromJson(Map<String, dynamic> json) {
+    return ForecastResponse(
+      commodity: json['commodity'] as String,
       market: json['market'] as String,
-      region: json['region'] as String?,
-      latestPrice: (json['latest_price'] as num).toDouble(),
       currency: json['currency'] as String? ?? 'UGX',
       unit: json['unit'] as String? ?? 'KG',
-      dateRecorded: json['date_recorded'] as String? ?? '',
-      daysSinceUpdate: json['days_since_update'] as int? ?? 0,
-      price30dAgo: (json['price_30d_ago'] as num?)?.toDouble(),
-      priceChangePct: (json['price_change_pct'] as num?)?.toDouble(),
+      horizonDays: json['horizon_days'] as int? ?? 0,
+      observationsUsed: json['observations_used'] as int? ?? 0,
+      forecast: (json['forecast'] as List<dynamic>? ?? [])
+          .map((e) => ForecastPoint.fromJson(e as Map<String, dynamic>))
+          .toList(),
       trend: json['trend'] as String? ?? 'stable',
-      dataPoints: json['data_points'] as int? ?? 0,
+      pctChange: (json['pct_change'] as num?)?.toDouble() ?? 0.0,
+      alert: json['alert'] as String?,
+      modelUsed: json['model_used'] as String? ?? 'linear',
+      generatedAt: json['generated_at'] as String? ?? '',
     );
   }
+
+  /// Convenience accessor for the UI: the last (furthest-out) predicted
+  /// price in the horizon. The backend has no single "last predicted"
+  /// field of its own — this is derived client-side from [forecast].
+  double get lastPredicted => forecast.isEmpty ? 0.0 : forecast.last.predictedPrice;
 }
 
-/// Cross-market summary for one commodity.
-/// Mirrors routers/markets.py::CommodityMarketSummary exactly — note the
-/// backend has no separate "best_price"/"worst_price" fields; the best and
-/// worst prices live on the matching entry in [markets] instead.
-class CommodityMarketSummary {
-  final String commodity;
-  final List<MarketPrice> markets; // sorted highest -> lowest price
-  final String bestMarketToSell;
-  final String worstMarketToSell;
-  final double priceSpread;
-  final double priceSpreadPct;
-  final double nationalAvgPrice;
-  final String currency;
-  final String unit;
-  final String recommendation;
-  final String generatedAt;
+/// Available commodities and markets in the loaded dataset.
+/// Mirrors routers/forecasts.py::CommodityListResponse.
+class CommodityList {
+  final List<String> commodities;
+  final List<String> markets;
+  final int totalObservations;
 
-  CommodityMarketSummary({
-    required this.commodity,
+  CommodityList({
+    required this.commodities,
     required this.markets,
-    required this.bestMarketToSell,
-    required this.worstMarketToSell,
-    required this.priceSpread,
-    required this.priceSpreadPct,
-    required this.nationalAvgPrice,
-    required this.currency,
-    required this.unit,
-    required this.recommendation,
-    required this.generatedAt,
+    required this.totalObservations,
   });
 
-  factory CommodityMarketSummary.fromJson(Map<String, dynamic> json) {
-    final list = (json['markets'] as List<dynamic>? ?? [])
-        .map((e) => MarketPrice.fromJson(e as Map<String, dynamic>))
-        .toList();
-    return CommodityMarketSummary(
-      commodity: json['commodity'] as String,
-      markets: list,
-      bestMarketToSell: json['best_market_to_sell'] as String? ?? '—',
-      worstMarketToSell: json['worst_market_to_sell'] as String? ?? '—',
-      priceSpread: (json['price_spread'] as num?)?.toDouble() ?? 0.0,
-      priceSpreadPct: (json['price_spread_pct'] as num?)?.toDouble() ?? 0.0,
-      nationalAvgPrice: (json['national_avg_price'] as num?)?.toDouble() ?? 0.0,
-      currency: json['currency'] as String? ?? 'UGX',
-      unit: json['unit'] as String? ?? 'KG',
-      recommendation: json['recommendation'] as String? ?? '',
-      generatedAt: json['generated_at'] as String? ?? '',
-    );
-  }
-
-  /// Best-market price, read off the matching [MarketPrice] entry rather
-  /// than assumed to be a top-level field (the backend doesn't send one).
-  /// `markets` is sorted highest -> lowest by the backend, so the first /
-  /// last entries are safe fallbacks if the name match ever misses.
-  MarketPrice? get bestMarket => _findMarket(bestMarketToSell) ?? _firstOrNull(markets);
-
-  MarketPrice? get worstMarket => _findMarket(worstMarketToSell) ?? _lastOrNull(markets);
-
-  MarketPrice? _findMarket(String name) {
-    for (final m in markets) {
-      if (m.market == name) return m;
-    }
-    return null;
-  }
-
-  static MarketPrice? _firstOrNull(List<MarketPrice> list) => list.isEmpty ? null : list.first;
-  static MarketPrice? _lastOrNull(List<MarketPrice> list) => list.isEmpty ? null : list.last;
-}
-
-/// One commodity x market pair with a notable recent price movement.
-/// Mirrors routers/markets.py::TopMoverItem.
-class TopMoverItem {
-  final String commodity;
-  final String market;
-  final double latestPrice;
-  final double previousPrice;
-  final double changePct;
-  final String direction; // "up" | "down"
-  final String alertLevel; // "high" | "medium" | "low"
-  final String currency;
-
-  TopMoverItem({
-    required this.commodity,
-    required this.market,
-    required this.latestPrice,
-    required this.previousPrice,
-    required this.changePct,
-    required this.direction,
-    required this.alertLevel,
-    required this.currency,
-  });
-
-  factory TopMoverItem.fromJson(Map<String, dynamic> json) {
-    return TopMoverItem(
-      commodity: json['commodity'] as String,
-      market: json['market'] as String,
-      latestPrice: (json['latest_price'] as num).toDouble(),
-      previousPrice: (json['previous_price'] as num).toDouble(),
-      changePct: (json['change_pct'] as num).toDouble(),
-      direction: json['direction'] as String? ?? 'up',
-      alertLevel: json['alert_level'] as String? ?? 'low',
-      currency: json['currency'] as String? ?? 'UGX',
-    );
-  }
-}
-
-/// A single buy-low/sell-high pair for one commodity.
-/// Mirrors routers/markets.py::ArbitrageOpportunity. Gross margin only —
-/// does not account for transport cost (see [note] for that caveat, which
-/// the backend already writes in plain language).
-class ArbitrageOpportunity {
-  final String commodity;
-  final String buyMarket;
-  final String sellMarket;
-  final double buyPrice;
-  final double sellPrice;
-  final double grossMargin;
-  final double grossMarginPct;
-  final String currency;
-  final String unit;
-  final bool viable;
-  final String note;
-
-  ArbitrageOpportunity({
-    required this.commodity,
-    required this.buyMarket,
-    required this.sellMarket,
-    required this.buyPrice,
-    required this.sellPrice,
-    required this.grossMargin,
-    required this.grossMarginPct,
-    required this.currency,
-    required this.unit,
-    required this.viable,
-    required this.note,
-  });
-
-  factory ArbitrageOpportunity.fromJson(Map<String, dynamic> json) {
-    return ArbitrageOpportunity(
-      commodity: json['commodity'] as String,
-      buyMarket: json['buy_market'] as String,
-      sellMarket: json['sell_market'] as String,
-      buyPrice: (json['buy_price'] as num).toDouble(),
-      sellPrice: (json['sell_price'] as num).toDouble(),
-      grossMargin: (json['gross_margin'] as num).toDouble(),
-      grossMarginPct: (json['gross_margin_pct'] as num).toDouble(),
-      currency: json['currency'] as String? ?? 'UGX',
-      unit: json['unit'] as String? ?? 'KG',
-      viable: json['viable'] as bool? ?? false,
-      note: json['note'] as String? ?? '',
-    );
-  }
-}
-
-/// Mirrors routers/markets.py::TopMoversResponse.
-class TopMoversResponse {
-  final List<TopMoverItem> gainers;
-  final List<TopMoverItem> losers;
-  final int periodDays;
-  final String generatedAt;
-
-  TopMoversResponse({
-    required this.gainers,
-    required this.losers,
-    required this.periodDays,
-    required this.generatedAt,
-  });
-
-  factory TopMoversResponse.fromJson(Map<String, dynamic> json) {
-    return TopMoversResponse(
-      gainers: (json['gainers'] as List<dynamic>? ?? [])
-          .map((e) => TopMoverItem.fromJson(e as Map<String, dynamic>))
+  factory CommodityList.fromJson(Map<String, dynamic> json) {
+    return CommodityList(
+      commodities: (json['commodities'] as List<dynamic>? ?? [])
+          .map((e) => e as String)
           .toList(),
-      losers: (json['losers'] as List<dynamic>? ?? [])
-          .map((e) => TopMoverItem.fromJson(e as Map<String, dynamic>))
+      markets: (json['markets'] as List<dynamic>? ?? [])
+          .map((e) => e as String)
           .toList(),
-      periodDays: json['period_days'] as int? ?? 30,
-      generatedAt: json['generated_at'] as String? ?? '',
+      totalObservations: json['total_observations'] as int? ?? 0,
+    );
+  }
+}
+
+/// A single historical price observation (for sparklines / charts).
+/// Mirrors routers/forecasts.py::HistoryPoint.
+class HistoryPoint {
+  final String date;
+  final double price;
+
+  HistoryPoint({required this.date, required this.price});
+
+  factory HistoryPoint.fromJson(Map<String, dynamic> json) {
+    return HistoryPoint(
+      date: json['date'] as String,
+      price: (json['price'] as num).toDouble(),
     );
   }
 }

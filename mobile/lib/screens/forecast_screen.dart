@@ -286,7 +286,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
                         color: Theme.of(context)
                             .colorScheme
                             .primary
-                            .withValues(alpha: 0.12),
+                            .withOpacity(0.12),
                       ),
                     ),
                     if (histEnd < spots.length)
