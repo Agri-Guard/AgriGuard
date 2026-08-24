@@ -49,6 +49,8 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
+from backend.app.services import wfp_sync
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/forecasts", tags=["Forecasts"])
@@ -129,6 +131,20 @@ class CompareResponse(BaseModel):
     horizon_days: int
     results: list[ForecastResponse]
     skipped_markets: list[str]   # Markets requested but with insufficient data
+
+
+class SyncStatusResponse(BaseModel):
+    """Status of the background WFP price-data sync (see services/wfp_sync.py)."""
+    last_modified: Optional[str] = None   # Upstream HDX resource's last-modified timestamp
+    size: Optional[int] = None            # Bytes, as reported by HDX at last sync
+    synced_at: Optional[str] = None       # When we last pulled a fresh copy (UTC ISO-8601)
+
+
+class SyncTriggerResponse(BaseModel):
+    """Result of an on-demand sync check."""
+    updated: bool
+    detail: str
+    status: SyncStatusResponse
 
 
 # =============================================================================
@@ -399,11 +415,28 @@ def prophet_forecast(series: pd.DataFrame, horizon: int) -> tuple[pd.DataFrame, 
         )
         m.fit(train)
 
-        future = m.make_future_dataframe(periods=horizon, freq="D")
+        # WFP price data is published monthly, so the freshest observation on
+        # disk is routinely 4-8 weeks old. make_future_dataframe() builds its
+        # future window off that last *data* date, not off today — so a stale
+        # dataset silently produced a "forecast" dated in the past by the time
+        # anyone viewed it. Anchor the future window to max(last data date,
+        # today) instead, so the horizon always starts tomorrow in the real
+        # world, regardless of how stale the underlying dataset is.
+        today = pd.Timestamp.now().normalize()
+        last_data_date = train["ds"].max()
+        anchor = max(last_data_date, today)
+        future_dates = pd.date_range(
+            start=anchor + timedelta(days=1), periods=horizon, freq="D"
+        )
+        future = pd.concat(
+            [train[["ds"]], pd.DataFrame({"ds": future_dates})],
+            ignore_index=True,
+        )
         raw_fc = m.predict(future)
         fc = (
-            raw_fc[["ds", "yhat", "yhat_lower", "yhat_upper"]]
-            .tail(horizon)
+            raw_fc[raw_fc["ds"].isin(future_dates)]
+            [["ds", "yhat", "yhat_lower", "yhat_upper"]]
+            .sort_values("ds")
             .reset_index(drop=True)
         )
         fc["yhat"]       = fc["yhat"].clip(lower=0)
@@ -528,7 +561,10 @@ def linear_extrapolation(series: pd.DataFrame, horizon: int) -> pd.DataFrame:
     slope, intercept = np.polyfit(x, prices, 1)
     std_band = np.std(prices) * 0.10
 
-    last_date = series["date"].max()
+    # Same staleness fix as prophet_forecast(): anchor to today, not to the
+    # dataset's last (possibly weeks-old) observation date.
+    today = pd.Timestamp.now().normalize()
+    last_date = max(series["date"].max(), today)
     rows = []
     for i in range(1, horizon + 1):
         yhat = intercept + slope * (len(prices) + i)
@@ -606,6 +642,38 @@ def _build_forecast_response(
 # =============================================================================
 # Routes
 # =============================================================================
+
+@router.get("/sync/status", response_model=SyncStatusResponse)
+def get_sync_status():
+    """
+    When was the price dataset last synced from HDX, and what did HDX report
+    for it at that time. No network call — reads the local sync-state file.
+    """
+    return SyncStatusResponse(**wfp_sync.last_sync_info())
+
+
+@router.post("/sync", response_model=SyncTriggerResponse)
+def trigger_sync(force: bool = Query(default=False, description="Skip the metadata check and re-download unconditionally")):
+    """
+    On-demand version of the background sync job (see services/wfp_sync.py
+    and its scheduled run in main.py's startup handler). Checks HDX's
+    lightweight resource metadata first — only downloads the ~3MB CSV if
+    that metadata shows the upstream file actually changed, unless
+    `force=true`. On a real update, also clears the cached DataFrame and
+    forecast cache so the very next request already sees fresh data.
+    """
+    updated = wfp_sync.sync_if_updated(force=force)
+    detail = (
+        "New data downloaded and applied."
+        if updated
+        else ("Already up to date — no download needed." if not force else "Sync failed; see server logs.")
+    )
+    return SyncTriggerResponse(
+        updated=updated,
+        detail=detail,
+        status=SyncStatusResponse(**wfp_sync.last_sync_info()),
+    )
+
 
 @router.get("/commodities", response_model=CommodityListResponse)
 def list_commodities():

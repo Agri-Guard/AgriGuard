@@ -41,6 +41,10 @@ class Settings:
     )
     model_dir: str = os.getenv("MODEL_DIR", str(ROOT / "ml" / "models"))
 
+    # WFP Uganda price data — live sync (see backend/app/services/wfp_sync.py)
+    wfp_sync_enabled: bool = os.getenv("WFP_SYNC_ENABLED", "true").lower() == "true"
+    wfp_sync_interval_hours: float = float(os.getenv("WFP_SYNC_INTERVAL_HOURS", "6"))
+
     # Anthropic
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
 

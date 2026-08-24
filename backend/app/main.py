@@ -11,8 +11,10 @@ Design principle:
 👉 Maximum reliability for live demo
 """
 
+import logging
 from datetime import datetime
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -27,12 +29,15 @@ from backend.app.schemas import (
 
 from backend.app.validator import validate_input
 from backend.app.model import predict_price, ModelNotReadyError
+from backend.app.services import wfp_sync
 
 from backend.app.routers.forecasts import router as forecasts_router
 from backend.app.routers.markets import router as markets_router
 from backend.app.routers.ussd import router as ussd_router
 from backend.app.routers.weather import router as weather_router
 from backend.app.routers.prices import router as prices_router
+
+logger = logging.getLogger(__name__)
 
 # routers/prices.py was previously NOT wired in: it imported a nonexistent
 # top-level `app` package (fixed — now uses `backend.app.*` like every other
@@ -67,7 +72,8 @@ app.include_router(prices_router)
 
 
 # =============================================================================
-# STARTUP — ensure the weather tables exist on a fresh SQLite dev DB
+# STARTUP — ensure the weather tables exist on a fresh SQLite dev DB, and
+# kick off the background WFP price-data sync scheduler
 # =============================================================================
 # markets/forecasts/ussd are pure-CSV routers (see their imports) — weather
 # is the first wired-in router that actually touches the DB, so nothing
@@ -75,9 +81,37 @@ app.include_router(prices_router)
 # EXISTS semantics), so this is safe to run on every startup, including
 # against an already-migrated Postgres/MySQL DB in production — it no-ops
 # there too.
+
+_scheduler: BackgroundScheduler | None = None
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     create_tables()
+
+    global _scheduler
+    if settings.wfp_sync_enabled and _scheduler is None:
+        _scheduler = BackgroundScheduler(daemon=True)
+        _scheduler.add_job(
+            wfp_sync.sync_if_updated,
+            "interval",
+            hours=settings.wfp_sync_interval_hours,
+            id="wfp_price_sync",
+            next_run_time=datetime.now(),  # also check once immediately on boot
+            max_instances=1,
+            coalesce=True,
+        )
+        _scheduler.start()
+        logger.info(
+            "WFP price sync scheduler started — checking every %.1fh",
+            settings.wfp_sync_interval_hours,
+        )
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
 
 
 # =============================================================================
