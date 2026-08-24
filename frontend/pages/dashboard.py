@@ -14,12 +14,19 @@ Fully wired to the FastAPI backend:
 Weather data: Open-Meteo API (free, no API key required)
 """
 
+import os
+import sys
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import requests
 from datetime import datetime, timedelta
+
+# frontend/pages/ -> frontend/, so `from style import inject_style` resolves
+# regardless of the working directory Streamlit was launched from.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from style import inject_style
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -30,33 +37,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+inject_style()
 
 # ─────────────────────────────────────────────
-# CUSTOM STYLES
+# PAGE-SPECIFIC STYLES (weather cards — not shared by other pages)
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap');
-
-    html, body, [class*="css"] { font-family: 'Space Grotesk', sans-serif; }
-
-    .metric-card {
-        background: linear-gradient(135deg, #0d1f0d 0%, #1a2e1a 100%);
-        border: 1px solid #00cc6633;
-        border-radius: 12px;
-        padding: 18px 20px;
-        margin-bottom: 8px;
-    }
-    .metric-val  { font-size: 1.9rem; font-weight: 700; color: #00cc66; }
-    .metric-lbl  { font-size: 0.82rem; color: #aaa; text-transform: uppercase; letter-spacing: .08em; }
-    .trend-up    { color: #00cc66; }
-    .trend-down  { color: #ff4c4c; }
-    .trend-stable{ color: #f0a500; }
-    .alert-high  { background:#3d0000; border-left:4px solid #ff4c4c; padding:8px 12px; border-radius:4px; margin-bottom:6px; }
-    .alert-med   { background:#2d1a00; border-left:4px solid #f0a500; padding:8px 12px; border-radius:4px; margin-bottom:6px; }
-    .alert-low   { background:#002d1a; border-left:4px solid #00cc66; padding:8px 12px; border-radius:4px; margin-bottom:6px; }
-    .status-dot-ok  { display:inline-block; width:10px; height:10px; border-radius:50%; background:#00cc66; margin-right:6px; }
-    .status-dot-err { display:inline-block; width:10px; height:10px; border-radius:50%; background:#ff4c4c; margin-right:6px; }
     .weather-card {
         background: linear-gradient(135deg, #0d1a2e 0%, #1a2540 100%);
         border: 1px solid #1E90FF33;
@@ -282,9 +269,16 @@ def weather_row_style(row):
 # ─────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────
-st.sidebar.image(
-    "https://img.shields.io/badge/AgriGuard-MVP-00cc66?style=for-the-badge&logo=leaf&logoColor=white",
-    use_column_width=True,
+st.sidebar.markdown(
+    """
+    <div style="text-align:center; padding:10px 0 4px;">
+        <span style="font-size:1.4rem; font-weight:700; color:#00cc66;">🌾 AgriGuard</span><br>
+        <span style="font-size:0.72rem; color:#7a8a7a; letter-spacing:.12em; text-transform:uppercase;">
+            Agricultural Intelligence · Uganda
+        </span>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 st.sidebar.markdown("---")
 
@@ -306,6 +300,21 @@ else:
         f'<span class="status-dot-err"></span> **Backend offline** — {health_err}',
         unsafe_allow_html=True,
     )
+
+# ── Live WFP price-data sync status ────────────────────────────────────────
+sync_status, sync_status_err = api("GET", "/forecasts/sync/status", base_url)
+with st.sidebar.expander("🔄 Price data sync", expanded=False):
+    if sync_status and sync_status.get("synced_at"):
+        st.caption(f"Last synced: {sync_status['synced_at'][:19].replace('T', ' ')} UTC")
+    else:
+        st.caption("Not yet synced from HDX in this environment — using bundled/initial data.")
+    if st.button("Check for updates now", use_container_width=True):
+        with st.spinner("Checking HDX for a newer Uganda food-price dataset…"):
+            sync_result, sync_err = api("POST", "/forecasts/sync", base_url)
+        if sync_result:
+            st.success(sync_result["detail"]) if sync_result["updated"] else st.info(sync_result["detail"])
+        else:
+            st.error(f"Sync check failed: {sync_err}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Forecast Settings")

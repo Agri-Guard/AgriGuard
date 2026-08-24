@@ -2,10 +2,18 @@
 AgriGuard Landing Page — Backend-aware
 """
 
+import os
+import sys
 import streamlit as st
 import requests
 
+# Home.py lives in frontend/, so this makes `from style import inject_style`
+# resolve regardless of the working directory Streamlit was launched from.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from style import inject_style
+
 st.set_page_config(page_title="AgriGuard", page_icon="🌾", layout="wide")
+inject_style()
 
 BASE_URL = "http://localhost:8000"
 
@@ -20,8 +28,6 @@ online = backend_alive(BASE_URL)
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap');
-html, body, [class*="css"] { font-family: 'Space Grotesk', sans-serif; }
 .hero-title { text-align:center; font-size:3rem; font-weight:700; color:#00cc66; }
 .hero-sub   { text-align:center; color:#aaa; font-size:1.1rem; margin-top:-10px; }
 .feat-card  { background:#0d1f0d; border:1px solid #00cc6633; border-radius:12px;
@@ -63,4 +69,4 @@ if st.button("🚀 Open Full Dashboard", type="primary", use_container_width=Tru
     st.switch_page("pages/dashboard.py")
 
 st.divider()
-st.caption("AgriGuard • Built by Keith Ndiema Kissa (2025/BCS/101/PS), MUST • Ministry of ICT Prototype Showcase 2026")
+st.caption("AgriGuard • Built by Keith Ndiema Kissa (2025/BCS/101/PS), Mbarara University of Science and Technology, 2026")

@@ -16,15 +16,22 @@ For Ministry of ICT Showcase: run this alongside the dashboard.
 """
 
 import os
+import sys
 import streamlit as st
 import requests
 from datetime import datetime
+
+# frontend/pages/ -> frontend/, so `from style import inject_style` resolves
+# regardless of the working directory Streamlit was launched from.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from style import inject_style
 
 st.set_page_config(
     page_title="AgriGuard — USSD Simulator",
     page_icon="📱",
     layout="centered",
 )
+inject_style()
 
 BASE_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 

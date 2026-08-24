@@ -4,10 +4,16 @@ Calls GET /forecasts/{commodity}?market=...&horizon=... (horizon in days, 1-90)
 """
 
 import os
+import sys
 import requests
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+# frontend/pages/ -> frontend/, so `from style import inject_style` resolves
+# regardless of the working directory Streamlit was launched from.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from style import inject_style
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
 
@@ -16,18 +22,26 @@ st.set_page_config(
     page_icon="📈",
     layout="wide",
 )
+inject_style()
 st.title("📈 Crop Price Forecast")
 st.caption("ML-powered price predictions up to 90 days ahead")
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
-def api_get(path: str, params: dict = None):
+def api_get(path: str, params: dict = None, timeout: int = 60):
     try:
-        r = requests.get(f"{BACKEND_URL}{path}", params=params, timeout=12)
+        r = requests.get(f"{BACKEND_URL}{path}", params=params, timeout=timeout)
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError:
+        return None
+    except requests.exceptions.Timeout:
+        st.error(
+            "The forecast is taking longer than expected to train (first request "
+            "for a commodity/market combo fits Prophet + XGBoost from scratch, "
+            "which can take a while). Try again — it's cached after the first run."
+        )
         return None
     except Exception as e:
         st.error(f"API error: {e}")
@@ -77,8 +91,9 @@ with st.sidebar:
 
 # ── main area ──────────────────────────────────────────────────────────────
 if run or True:   # auto-run on page load
-    forecast_data = get_forecast(commodity, market, horizon)
-    history_data  = get_history(commodity, market, days=365)
+    with st.spinner(f"Forecasting {commodity} in {market}… (first run per combo can take a bit)"):
+        forecast_data = get_forecast(commodity, market, horizon)
+        history_data  = get_history(commodity, market, days=365)
 
     if forecast_data is None:
         st.warning(
