@@ -60,7 +60,7 @@ router = APIRouter(prefix="/forecasts", tags=["Forecasts"])
 DATA_PATH: str = os.environ.get(
     "AGRIGUARD_PRICE_DATA",
     os.path.join(
-        os.path.dirname(__file__), "..", "..", "data", "raw", "wfp_food_prices_uga.csv"
+        os.path.dirname(__file__), "..", "..", "..", "data", "raw", "wfp_food_prices_uga.csv"
     ),
 )
 
@@ -143,10 +143,17 @@ def load_price_data() -> pd.DataFrame:
     This function normalises them all to a consistent schema:
       date, commodity, market, price, currency, unit
 
+    Cached after first successful load — the CSV is static for the lifetime
+    of the process, and re-parsing it on every request (thousands of rows)
+    was adding unnecessary latency on top of the Prophet/XGBoost fit cost.
+
     Raises:
         HTTPException 503 if the file is missing.
         HTTPException 500 if required columns cannot be found after normalisation.
     """
+    if load_price_data._cache is not None:
+        return load_price_data._cache
+
     try:
         df = pd.read_csv(DATA_PATH, low_memory=False)
     except FileNotFoundError:
@@ -218,7 +225,12 @@ def load_price_data() -> pd.DataFrame:
     logger.info(
         "Loaded %d price observations from %s", len(df), os.path.basename(DATA_PATH)
     )
-    return df.reset_index(drop=True)
+    df = df.reset_index(drop=True)
+    load_price_data._cache = df
+    return df
+
+
+load_price_data._cache = None
 
 
 # =============================================================================
@@ -657,6 +669,13 @@ def get_price_history(
     )
 
 
+# In-memory cache of built forecasts, keyed by (commodity, market, horizon).
+# Prophet + XGBoost fitting is the expensive part of this endpoint (often
+# several seconds, more on a cold process), and the same combo is requested
+# repeatedly as users click around the dashboard — so cache the response.
+_FORECAST_CACHE: dict[tuple[str, str, int], "ForecastResponse"] = {}
+
+
 @router.get("/{commodity}", response_model=ForecastResponse)
 def get_forecast(
     commodity: str,
@@ -688,6 +707,12 @@ def get_forecast(
     market_title = market.strip().title()
 
     subset, resolved_market = _filter_subset(df, commodity_title, market_title)
+
+    cache_key = (commodity_title, resolved_market, horizon)
+    cached = _FORECAST_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     train = _training_window(subset)
 
     if len(train) < MIN_OBSERVATIONS:
@@ -700,13 +725,15 @@ def get_forecast(
             ),
         )
 
-    return _build_forecast_response(
+    response = _build_forecast_response(
         commodity=commodity_title,
         market=resolved_market,
         train=train,
         full_subset=subset,
         horizon=horizon,
     )
+    _FORECAST_CACHE[cache_key] = response
+    return response
 
 
 @router.get("/compare/{commodity}", response_model=CompareResponse)
