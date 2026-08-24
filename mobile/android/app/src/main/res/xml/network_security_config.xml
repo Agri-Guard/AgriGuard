@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Allows plain HTTP (cleartext) to the AgriGuard dev backend.
+  Android 9+ (API 28+) blocks cleartext traffic by default.
+  Add your specific LAN IP below instead of allowing it globally —
+  keeps things safe for anything that isn't your own dev server.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Android Emulator loopback alias -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- Replace with your machine's actual LAN IP for real-device testing -->
+        <domain includeSubdomains="false">192.168.1.42</domain>
+    </domain-config>
+</network-security-config>

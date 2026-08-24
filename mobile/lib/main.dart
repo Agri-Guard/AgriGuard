@@ -5,6 +5,8 @@ import 'screens/forecast_screen.dart';
 import 'screens/market_screen.dart';
 import 'screens/alerts_screen.dart';
 import 'services/api_service.dart';
+import 'offline/local_cache.dart';
+import 'offline/sync_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +21,10 @@ class AgriGuardApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         Provider(create: (_) => ApiService()),
+        Provider(create: (_) => LocalCache()),
+        ProxyProvider2<ApiService, LocalCache, SyncService>(
+          update: (_, api, cache, __) => SyncService(api: api, cache: cache),
+        ),
       ],
       child: MaterialApp(
         title: 'AgriGuard',
@@ -55,6 +61,23 @@ class _HomeShellState extends State<HomeShell> {
     MarketScreen(),
     AlertsScreen(),
   ];
+
+  static const _prefetchPairs = [
+    ('Maize', 'Kampala'),
+    ('Beans', 'Kampala'),
+    ('Cassava', 'Kampala'),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    // Warm the offline cache in the background whenever the app opens with
+    // connectivity, so ForecastScreen has something to fall back on the
+    // next time a request fails (see ForecastScreen._load).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<SyncService>().prefetch(_prefetchPairs);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

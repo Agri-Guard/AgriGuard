@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../models/forecast_model.dart';
 import '../widgets/forecast_card.dart';
+import '../offline/local_cache.dart';
 
 class ForecastScreen extends StatefulWidget {
   const ForecastScreen({super.key});
@@ -22,6 +23,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
   List<HistoryPoint> _history = [];
   bool _loading = false;
   String? _error;
+  bool _fromCache = false;
 
   @override
   void dispose() {
@@ -40,6 +42,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _fromCache = false;
     });
     try {
       final api = context.read<ApiService>();
@@ -63,10 +66,59 @@ class _ForecastScreenState extends State<ForecastScreen> {
         _history = hist;
       });
     } catch (e) {
-      setState(() => _error = e.toString());
+      // Network/API call failed — fall back to whatever HomeShell's
+      // background sync last cached for this commodity/market before
+      // surfacing a hard error, so a lost connection doesn't leave the
+      // screen blank if we have something recent to show.
+      final cached = await context.read<LocalCache>().get(
+            'forecast_${commodity}_$market',
+          );
+      if (cached != null) {
+        setState(() {
+          _forecast = _forecastFromCache(cached);
+          _history = [];
+          _fromCache = true;
+        });
+      } else {
+        setState(() => _error = e.toString());
+      }
     } finally {
       setState(() => _loading = false);
     }
+  }
+
+  /// Rebuilds a display-ready [ForecastResponse] from the compact map
+  /// [SyncService.prefetch] stores offline. The cache only keeps the
+  /// headline numbers (not the full point-by-point horizon), so this
+  /// produces a single synthetic [ForecastPoint] carrying the last known
+  /// price — enough for [ForecastCard] to render correctly, including
+  /// [ForecastResponse.lastPredicted], without pretending we have a full
+  /// forecast curve to chart.
+  ForecastResponse _forecastFromCache(Map<String, dynamic> cached) {
+    final lastPrice = (cached['last_price'] as num?)?.toDouble() ?? 0.0;
+    final cachedAt = cached['cached_at'] as String? ?? '';
+    return ForecastResponse(
+      commodity: cached['commodity'] as String? ?? '',
+      market: cached['market'] as String? ?? '',
+      currency: 'UGX',
+      unit: 'KG',
+      horizonDays: _horizon,
+      observationsUsed: 0,
+      forecast: [
+        ForecastPoint(
+          date: cachedAt,
+          predictedPrice: lastPrice,
+          lowerBound: lastPrice,
+          upperBound: lastPrice,
+          confidence: 1.0,
+        ),
+      ],
+      trend: cached['trend'] as String? ?? 'stable',
+      pctChange: (cached['pct_change'] as num?)?.toDouble() ?? 0.0,
+      alert: cached['alert'] as String?,
+      modelUsed: 'cached',
+      generatedAt: cachedAt,
+    );
   }
 
   @override
@@ -159,10 +211,34 @@ class _ForecastScreenState extends State<ForecastScreen> {
                 child: CircularProgressIndicator(),
               ),
             ),
+          if (_fromCache && _forecast != null && !_loading)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.cloud_off, size: 16, color: Theme.of(context).colorScheme.outline),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Offline — showing the last synced price, not a live forecast curve.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           if (_forecast != null && !_loading) ...[
             ForecastCard(forecast: _forecast!),
             const SizedBox(height: 16),
-            if (_history.isNotEmpty || _forecast!.forecast.isNotEmpty)
+            if (!_fromCache && (_history.isNotEmpty || _forecast!.forecast.isNotEmpty))
               _buildChart(context),
             const SizedBox(height: 16),
             Text(
@@ -286,7 +362,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
                         color: Theme.of(context)
                             .colorScheme
                             .primary
-                            .withOpacity(0.12),
+                            .withValues(alpha: 0.12),
                       ),
                     ),
                     if (histEnd < spots.length)

@@ -7,7 +7,15 @@ import '../models/market_model.dart';
 class ApiService {
   final String baseUrl;
 
-  ApiService({this.baseUrl = 'http://10.0.2.2:8000'}); // Android emulator → host
+  /// Resolved once at build/run time from --dart-define=API_BASE_URL=....
+  /// Falls back to the Android Emulator's host alias when not supplied,
+  /// which is only valid on the emulator — never on a real device.
+  static const String _envBaseUrl = String.fromEnvironment('API_BASE_URL');
+
+  ApiService({
+    String? baseUrl,
+  }) : baseUrl = baseUrl ??
+            (_envBaseUrl.isNotEmpty ? _envBaseUrl : 'http://10.0.2.2:8000');
 
   Future<Map<String, dynamic>> _get(String path, [Map<String, String>? query]) async {
     final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);

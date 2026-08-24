@@ -154,54 +154,6 @@ class TopMoverItem {
   }
 }
 
-/// A single buy-low/sell-high pair for one commodity.
-/// Mirrors routers/markets.py::ArbitrageOpportunity. Gross margin only —
-/// does not account for transport cost (see [note] for that caveat, which
-/// the backend already writes in plain language).
-class ArbitrageOpportunity {
-  final String commodity;
-  final String buyMarket;
-  final String sellMarket;
-  final double buyPrice;
-  final double sellPrice;
-  final double grossMargin;
-  final double grossMarginPct;
-  final String currency;
-  final String unit;
-  final bool viable;
-  final String note;
-
-  ArbitrageOpportunity({
-    required this.commodity,
-    required this.buyMarket,
-    required this.sellMarket,
-    required this.buyPrice,
-    required this.sellPrice,
-    required this.grossMargin,
-    required this.grossMarginPct,
-    required this.currency,
-    required this.unit,
-    required this.viable,
-    required this.note,
-  });
-
-  factory ArbitrageOpportunity.fromJson(Map<String, dynamic> json) {
-    return ArbitrageOpportunity(
-      commodity: json['commodity'] as String,
-      buyMarket: json['buy_market'] as String,
-      sellMarket: json['sell_market'] as String,
-      buyPrice: (json['buy_price'] as num).toDouble(),
-      sellPrice: (json['sell_price'] as num).toDouble(),
-      grossMargin: (json['gross_margin'] as num).toDouble(),
-      grossMarginPct: (json['gross_margin_pct'] as num).toDouble(),
-      currency: json['currency'] as String? ?? 'UGX',
-      unit: json['unit'] as String? ?? 'KG',
-      viable: json['viable'] as bool? ?? false,
-      note: json['note'] as String? ?? '',
-    );
-  }
-}
-
 /// Mirrors routers/markets.py::TopMoversResponse.
 class TopMoversResponse {
   final List<TopMoverItem> gainers;
