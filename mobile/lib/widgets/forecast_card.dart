@@ -86,7 +86,9 @@ class ForecastCard extends StatelessWidget {
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.errorContainer.withValues(alpha: 0.4),
+                    // .withOpacity(), not .withValues() — the latter needs
+                    // Flutter 3.27+ and CI is pinned to 3.24.x.
+                    color: theme.colorScheme.errorContainer.withOpacity(0.4),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(

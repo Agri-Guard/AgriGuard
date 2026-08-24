@@ -328,7 +328,13 @@ class _ForecastScreenState extends State<ForecastScreen> {
                     bottomTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
-                        interval: (spots.length / 4).ceilToDouble().clamp(1, 10),
+                        // clamp() on a double returns num, not double —
+                        // needs an explicit toDouble() for the double?
+                        // param below.
+                        interval: (spots.length / 4)
+                            .ceilToDouble()
+                            .clamp(1, 10)
+                            .toDouble(),
                         getTitlesWidget: (v, _) {
                           final idx = v.toInt();
                           if (idx < 0 || idx >= labels.length) {
@@ -359,10 +365,12 @@ class _ForecastScreenState extends State<ForecastScreen> {
                       dotData: const FlDotData(show: false),
                       belowBarData: BarAreaData(
                         show: true,
+                        // .withOpacity(), not .withValues() — the latter needs
+                        // Flutter 3.27+ and CI is pinned to 3.24.x.
                         color: Theme.of(context)
                             .colorScheme
                             .primary
-                            .withValues(alpha: 0.12),
+                            .withOpacity(0.12),
                       ),
                     ),
                     if (histEnd < spots.length)

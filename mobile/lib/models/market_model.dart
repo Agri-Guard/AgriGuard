@@ -154,6 +154,54 @@ class TopMoverItem {
   }
 }
 
+/// Profit opportunity from buying in one market and selling in another.
+/// Mirrors routers/markets.py::ArbitrageOpportunity. Does NOT account for
+/// transport cost itself — [note] carries that caveat as backend-generated
+/// text (see market_screen.dart's disclaimer above the arbitrage list).
+class ArbitrageOpportunity {
+  final String commodity;
+  final String buyMarket;
+  final String sellMarket;
+  final double buyPrice;
+  final double sellPrice;
+  final double grossMargin; // sellPrice - buyPrice
+  final double grossMarginPct; // grossMargin / buyPrice * 100
+  final String currency;
+  final String unit;
+  final bool viable; // true if margin likely exceeds typical transport cost
+  final String note;
+
+  ArbitrageOpportunity({
+    required this.commodity,
+    required this.buyMarket,
+    required this.sellMarket,
+    required this.buyPrice,
+    required this.sellPrice,
+    required this.grossMargin,
+    required this.grossMarginPct,
+    required this.currency,
+    required this.unit,
+    required this.viable,
+    required this.note,
+  });
+
+  factory ArbitrageOpportunity.fromJson(Map<String, dynamic> json) {
+    return ArbitrageOpportunity(
+      commodity: json['commodity'] as String? ?? '',
+      buyMarket: json['buy_market'] as String? ?? '',
+      sellMarket: json['sell_market'] as String? ?? '',
+      buyPrice: (json['buy_price'] as num?)?.toDouble() ?? 0.0,
+      sellPrice: (json['sell_price'] as num?)?.toDouble() ?? 0.0,
+      grossMargin: (json['gross_margin'] as num?)?.toDouble() ?? 0.0,
+      grossMarginPct: (json['gross_margin_pct'] as num?)?.toDouble() ?? 0.0,
+      currency: json['currency'] as String? ?? 'UGX',
+      unit: json['unit'] as String? ?? 'KG',
+      viable: json['viable'] as bool? ?? false,
+      note: json['note'] as String? ?? '',
+    );
+  }
+}
+
 /// Mirrors routers/markets.py::TopMoversResponse.
 class TopMoversResponse {
   final List<TopMoverItem> gainers;
