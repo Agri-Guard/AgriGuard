@@ -10,12 +10,9 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  http: ^1.2.2
   provider: ^6.1.2
-  shared_preferences: ^2.3.2
   intl: ^0.19.0
   fl_chart: ^0.69.0
-  connectivity_plus: ^6.0.5
 
 dev_dependencies:
   flutter_test:
@@ -27,6 +24,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/icon/
+    - assets/data/agriguard_offline_data.json
 
 # Run `dart run flutter_launcher_icons` after `flutter pub get` to generate
 # every mipmap/AppIcon size for Android + iOS from the source images below.
