@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/market_model.dart';
 import '../services/api_service.dart';
+import '../widgets/data_source_chip.dart';
 
 class MarketScreen extends StatefulWidget {
   const MarketScreen({super.key});
@@ -18,6 +19,7 @@ class _MarketScreenState extends State<MarketScreen> {
   String? _arbitrageNotice; // set instead of _error for the expected 404/422 cases
   bool _loading = false;
   String? _error;
+  bool _isLive = false;
 
   Future<void> _load() async {
     setState(() {
@@ -29,8 +31,11 @@ class _MarketScreenState extends State<MarketScreen> {
       // Fetch the cross-market summary, the national movers feed, and
       // arbitrage pairs together — one failing shouldn't blank the others,
       // so they're awaited independently below rather than via Future.wait
-      // (which fails fast on the first rejection).
-      final summaryFuture = api.marketSummary(_commodity);
+      // (which fails fast on the first rejection). Each gets its own
+      // LiveFlag rather than sharing one on ApiService, since these three
+      // requests are genuinely concurrent — a shared flag would race.
+      final summarySource = LiveFlag();
+      final summaryFuture = api.marketSummary(_commodity, source: summarySource);
       final moversFuture = api.topMovers(periodDays: 30, topN: 5);
       final arbitrageFuture = api.arbitrageOpportunities(commodity: _commodity);
 
@@ -74,6 +79,7 @@ class _MarketScreenState extends State<MarketScreen> {
         _arbitrage = arbitrage;
         _arbitrageNotice = arbitrageNotice;
         _error = error;
+        _isLive = summarySource.value;
       });
     } finally {
       setState(() => _loading = false);
@@ -89,7 +95,12 @@ class _MarketScreenState extends State<MarketScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('🏪 Market Intelligence')),
+      appBar: AppBar(
+        title: const Text('🏪 Market Intelligence'),
+        actions: [
+          if (_summary != null || _error != null) DataSourceChip(isLive: _isLive),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(

@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../models/forecast_model.dart';
 import '../widgets/forecast_card.dart';
+import '../widgets/data_source_chip.dart';
 
 class ForecastScreen extends StatefulWidget {
   const ForecastScreen({super.key});
@@ -22,6 +23,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
   List<HistoryPoint> _history = [];
   bool _loading = false;
   String? _error;
+  bool _isLive = false;
 
   @override
   void dispose() {
@@ -43,10 +45,12 @@ class _ForecastScreenState extends State<ForecastScreen> {
     });
     try {
       final api = context.read<ApiService>();
+      final source = LiveFlag();
       final fc = await api.getForecast(
         commodity: commodity,
         market: market,
         horizon: _horizon,
+        source: source,
       );
       List<HistoryPoint> hist = [];
       try {
@@ -61,10 +65,13 @@ class _ForecastScreenState extends State<ForecastScreen> {
       setState(() {
         _forecast = fc;
         _history = hist;
+        _isLive = source.value;
       });
+    } on ApiException catch (e) {
+      // A substituted-market fallback is informational, not a hard error —
+      // show it as a banner instead of blanking the whole screen.
+      setState(() => _error = e.toString());
     } catch (e) {
-      // Everything is bundled locally now — this only fires for a genuinely
-      // unknown commodity/market combination, not a dropped connection.
       setState(() => _error = e.toString());
     } finally {
       setState(() => _loading = false);
@@ -84,6 +91,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
       appBar: AppBar(
         title: const Text('📈 Price Forecast'),
         actions: [
+          if (_forecast != null || _error != null) DataSourceChip(isLive: _isLive),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loading ? null : _load,

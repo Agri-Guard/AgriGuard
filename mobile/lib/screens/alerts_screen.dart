@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
-import '../models/forecast_model.dart';
+import '../widgets/data_source_chip.dart';
 
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({super.key});
@@ -14,6 +14,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
   final _watchlist = <String>['Maize', 'Beans', 'Cassava'];
   final _alerts = <String>[];
   bool _loading = false;
+  bool _isLive = false;
+  bool _everLoaded = false;
 
   Future<void> _refresh() async {
     setState(() {
@@ -21,9 +23,12 @@ class _AlertsScreenState extends State<AlertsScreen> {
       _alerts.clear();
     });
     final api = context.read<ApiService>();
+    var sawLive = false;
     for (final crop in _watchlist) {
       try {
-        final fc = await api.getForecast(commodity: crop, horizon: 14);
+        final source = LiveFlag();
+        final fc = await api.getForecast(commodity: crop, horizon: 14, source: source);
+        if (source.value) sawLive = true;
         if (fc.alert != null && fc.alert!.isNotEmpty) {
           _alerts.add('${fc.commodity} (${fc.market}): ${fc.alert}');
         } else if (fc.pctChange.abs() >= 5) {
@@ -36,7 +41,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
         // skip offline / missing
       }
     }
-    setState(() => _loading = false);
+    setState(() {
+      _loading = false;
+      _isLive = sawLive;
+      _everLoaded = true;
+    });
   }
 
   @override
@@ -51,6 +60,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
       appBar: AppBar(
         title: const Text('🔔 Alerts'),
         actions: [
+          if (_everLoaded) DataSourceChip(isLive: _isLive),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loading ? null : _refresh,

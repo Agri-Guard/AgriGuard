@@ -1,38 +1,50 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:http/http.dart' as http;
 import '../models/forecast_model.dart';
 import '../models/market_model.dart';
+import 'backend_config.dart';
 
-/// Fully offline data source — no HTTP, no backend, ever.
+/// Mutable out-parameter a caller can pass to any ApiService method to find
+/// out whether the result it got back was live or from the offline
+/// fallback. Deliberately NOT a field on ApiService itself: several screens
+/// (market_screen.dart) fire multiple ApiService calls concurrently against
+/// one shared instance, and a shared "last call was live" field would be a
+/// race between them — whichever request happened to finish last would
+/// silently overwrite the flag for the others. Each call site creates its
+/// own LiveFlag, so there's nothing to race.
+class LiveFlag {
+  bool value = false;
+}
+
+/// Talks to the live AgriGuard FastAPI backend when a URL is configured
+/// (Settings tab) and it responds, and falls back to a bundled offline
+/// snapshot (assets/data/agriguard_offline_data.json) when it isn't
+/// configured, unreachable, or too slow.
 ///
-/// Keith's PC (where the FastAPI backend normally runs) isn't reachable
-/// while he's out on mobile data, so the whole "point the app at a live
-/// server" approach (LAN IP, network security config, INTERNET permission)
-/// is out. Instead the same commodity/market/arbitrage numbers the backend
-/// would compute are precomputed once (see gen_offline_data.py, run against
-/// the exact same algorithms as backend/app/routers/forecasts.py and
-/// markets.py) and bundled into the APK as assets/data/agriguard_offline_data.json.
-/// This class keeps the ApiService name and every method signature from the
-/// old HTTP client so ForecastScreen/MarketScreen/AlertsScreen don't need to
-/// change at all — only what's behind the interface changed.
-///
-/// Trade-off (confirmed with Keith): forecasts and prices are a snapshot as
-/// of whenever gen_offline_data.py was last run, not live. Re-run it and
-/// rebuild the APK to refresh the bundled numbers.
+/// Previous version of this file went fully offline — no HTTP, ever —
+/// because Keith's dev machine wasn't reachable while out on mobile data.
+/// That meant every screen (change market, hit refresh) only ever re-read
+/// the same static snapshot, so nothing ever visibly changed. This restores
+/// the live path (matching the desktop dashboard's behaviour) while keeping
+/// the offline snapshot as a safety net instead of the only source.
 class ApiService {
   static const String _assetPath = 'assets/data/agriguard_offline_data.json';
-  static Map<String, dynamic>? _cache;
+  static const Duration _timeout = Duration(seconds: 8);
+  static Map<String, dynamic>? _offlineCache;
 
-  Future<Map<String, dynamic>> _data() async {
-    if (_cache != null) return _cache!;
+  Future<Map<String, dynamic>> _offlineData() async {
+    if (_offlineCache != null) return _offlineCache!;
     final raw = await rootBundle.loadString(_assetPath);
-    _cache = jsonDecode(raw) as Map<String, dynamic>;
-    return _cache!;
+    _offlineCache = jsonDecode(raw) as Map<String, dynamic>;
+    return _offlineCache!;
   }
 
-  /// Case/whitespace-insensitive match against the bundled commodity or
-  /// market name list — mirrors the backend's `.strip().title()` normalisation
-  /// so a user typing "maize" or " Maize " still resolves.
+  /// Case/whitespace-insensitive match against a known name list — mirrors
+  /// the backend's `.strip().title()` normalisation so a user typing
+  /// "maize" or " Maize " still resolves.
   String? _resolve(String input, List<String> options) {
     final target = input.trim().toLowerCase();
     for (final o in options) {
@@ -41,10 +53,63 @@ class ApiService {
     return null;
   }
 
-  Future<bool> health() async => true; // always "up" — there's no server to be down.
+  /// GET against the configured backend. Returns null (never throws) if no
+  /// backend is configured, it's unreachable, or it times out — callers
+  /// treat null as "fall back to offline data". A non-2xx response with a
+  /// body IS treated as a real answer from the server (e.g. 404 "no data
+  /// for that market") and throws ApiException rather than falling back,
+  /// so a genuinely wrong commodity name reports clearly instead of
+  /// silently substituting bundled data.
+  Future<dynamic> _get(String path, [Map<String, String>? query, LiveFlag? source]) async {
+    final base = await BackendConfig.getBaseUrl();
+    if (base.isEmpty) {
+      source?.value = false;
+      return null;
+    }
+    final uri = Uri.parse('$base$path').replace(queryParameters: query);
+    try {
+      final res = await http.get(uri).timeout(_timeout);
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        source?.value = true;
+        return jsonDecode(res.body);
+      }
+      source?.value = true; // reached the server; it just said no
+      String detail = res.body;
+      try {
+        final parsed = jsonDecode(res.body);
+        if (parsed is Map && parsed['detail'] != null) detail = '${parsed['detail']}';
+      } catch (_) {}
+      throw ApiException(res.statusCode, detail);
+    } on ApiException {
+      rethrow;
+    } on TimeoutException {
+      source?.value = false;
+      return null;
+    } on SocketException {
+      source?.value = false;
+      return null;
+    } catch (_) {
+      source?.value = false;
+      return null;
+    }
+  }
 
-  Future<CommodityList> listCommodities() async {
-    final d = await _data();
+  Future<bool> health() async {
+    final base = await BackendConfig.getBaseUrl();
+    if (base.isEmpty) return false;
+    try {
+      final res = await http.get(Uri.parse('$base/health')).timeout(_timeout);
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<CommodityList> listCommodities({LiveFlag? source}) async {
+    final live = await _get('/forecasts/commodities', null, source);
+    if (live != null) return CommodityList.fromJson(live as Map<String, dynamic>);
+
+    final d = await _offlineData();
     final commodities = (d['commodities'] as List<dynamic>).cast<String>();
     final markets = (d['markets'] as List<dynamic>).cast<String>();
     return CommodityList(
@@ -58,43 +123,89 @@ class ApiService {
     required String commodity,
     String market = 'Kampala',
     int horizon = 14,
+    LiveFlag? source,
   }) async {
-    final d = await _data();
+    final live = await _get(
+      '/forecasts/${Uri.encodeComponent(commodity.trim())}',
+      {'market': market.trim(), 'horizon': '$horizon'},
+      source,
+    );
+    if (live != null) return ForecastResponse.fromJson(live as Map<String, dynamic>);
+    source?.value = false;
+    return _offlineForecast(commodity: commodity, market: market, horizon: horizon);
+  }
+
+  Future<ForecastResponse> _offlineForecast({
+    required String commodity,
+    required String market,
+    required int horizon,
+  }) async {
+    final d = await _offlineData();
     final forecasts = d['forecasts'] as Map<String, dynamic>;
     final commodities = (d['commodities'] as List<dynamic>).cast<String>();
 
     final resolvedCommodity = _resolve(commodity, commodities) ?? commodity.trim();
-    // Exact commodity+market key first; otherwise any market with data for
-    // this commodity, mirroring the backend's fallback chain in _filter_subset().
     var key = '$resolvedCommodity|${market.trim()}';
+    String? fallbackUsedMarket;
     if (!forecasts.containsKey(key)) {
       final fallbackKey = forecasts.keys.firstWhere(
         (k) => k.startsWith('$resolvedCommodity|'),
         orElse: () => '',
       );
       if (fallbackKey.isEmpty) {
-        throw ApiException(404, 'No price data found for "$commodity".');
+        throw ApiException(404, 'No offline price data bundled for "$commodity".');
       }
       key = fallbackKey;
+      fallbackUsedMarket = fallbackKey.split('|').last;
     }
     final entry = forecasts[key] as Map<String, dynamic>;
     final horizons = entry['horizons'] as Map<String, dynamic>;
 
-    // Bundled data only precomputed 7/14/28-day horizons — snap to the
-    // nearest available one rather than erroring on an odd value.
     final available = horizons.keys.map(int.parse).toList()..sort();
     final chosen = available.reduce(
       (a, b) => (a - horizon).abs() <= (b - horizon).abs() ? a : b,
     );
-    return ForecastResponse.fromJson(horizons['$chosen'] as Map<String, dynamic>);
+    final resp = ForecastResponse.fromJson(horizons['$chosen'] as Map<String, dynamic>);
+    if (fallbackUsedMarket != null) {
+      // Surface the substitution instead of returning it silently — this is
+      // exactly the "changed market, nothing happened" bug: the bundled
+      // snapshot has no Maize data for Mbale, so it used to quietly return
+      // Lira instead with no indication anything had changed.
+      throw ApiException(
+        ApiService.offlineMarketSubstituted,
+        'No offline data for "$commodity" in "$market" — nearest bundled '
+        'market is "$fallbackUsedMarket". Configure a live backend in '
+        'Settings for other markets.',
+      );
+    }
+    return resp;
   }
+
+  /// Not a real HTTP status — used to distinguish "found data, but for a
+  /// different market than asked" so callers can decide whether to show it
+  /// anyway (with a banner) or treat it as a hard failure. See forecast_screen.dart.
+  static const int offlineMarketSubstituted = 782;
 
   Future<List<HistoryPoint>> getHistory({
     required String commodity,
     String market = 'Kampala',
     int days = 180,
+    LiveFlag? source,
   }) async {
-    final d = await _data();
+    final live = await _get(
+      '/forecasts/history/${Uri.encodeComponent(commodity.trim())}',
+      {'market': market.trim(), 'days': '$days'},
+      source,
+    );
+    if (live != null) {
+      final hist = (live['history'] as List<dynamic>? ?? [])
+          .map((e) => HistoryPoint.fromJson(e as Map<String, dynamic>))
+          .toList();
+      return hist;
+    }
+    source?.value = false;
+
+    final d = await _offlineData();
     final forecasts = d['forecasts'] as Map<String, dynamic>;
     final commodities = (d['commodities'] as List<dynamic>).cast<String>();
     final resolvedCommodity = _resolve(commodity, commodities) ?? commodity.trim();
@@ -109,14 +220,17 @@ class ApiService {
       key = fallbackKey;
     }
     final entry = forecasts[key] as Map<String, dynamic>;
-    final hist = (entry['history'] as List<dynamic>)
+    return (entry['history'] as List<dynamic>)
         .map((e) => HistoryPoint.fromJson(e as Map<String, dynamic>))
         .toList();
-    return hist;
   }
 
-  Future<CommodityMarketSummary> marketSummary(String commodity) async {
-    final d = await _data();
+  Future<CommodityMarketSummary> marketSummary(String commodity, {LiveFlag? source}) async {
+    final live = await _get('/markets/summary/${Uri.encodeComponent(commodity.trim())}', null, source);
+    if (live != null) return CommodityMarketSummary.fromJson(live as Map<String, dynamic>);
+    source?.value = false;
+
+    final d = await _offlineData();
     final summaries = d['market_summaries'] as Map<String, dynamic>;
     final commodities = (d['commodities'] as List<dynamic>).cast<String>();
     final resolved = _resolve(commodity, commodities) ?? commodity.trim();
@@ -126,11 +240,17 @@ class ApiService {
     return CommodityMarketSummary.fromJson(summaries[resolved] as Map<String, dynamic>);
   }
 
-  Future<TopMoversResponse> topMovers({int periodDays = 30, int topN = 5}) async {
-    final d = await _data();
+  Future<TopMoversResponse> topMovers({int periodDays = 30, int topN = 5, LiveFlag? source}) async {
+    final live = await _get(
+      '/markets/movers',
+      {'period_days': '$periodDays', 'top_n': '$topN'},
+      source,
+    );
+    if (live != null) return TopMoversResponse.fromJson(live as Map<String, dynamic>);
+    source?.value = false;
+
+    final d = await _offlineData();
     final movers = d['top_movers'] as Map<String, dynamic>;
-    // Bundled data was precomputed for a fixed 30-day window and top-5 —
-    // topN just truncates further, periodDays is informational only here.
     final gainers = (movers['gainers'] as List<dynamic>).take(topN).toList();
     final losers = (movers['losers'] as List<dynamic>).take(topN).toList();
     return TopMoversResponse.fromJson({
@@ -141,8 +261,13 @@ class ApiService {
     });
   }
 
-  Future<Map<String, dynamic>> nationalSummary() async {
-    final d = await _data();
+  Future<Map<String, dynamic>> nationalSummary({LiveFlag? source}) async {
+    final live = await _get('/markets/national-summary', null, source);
+    if (live != null) {
+      return {'data_as_of': live['data_as_of'], 'generated_at': live['generated_at']};
+    }
+    source?.value = false;
+    final d = await _offlineData();
     return {'data_as_of': d['data_as_of'], 'generated_at': d['generated_at']};
   }
 
@@ -150,8 +275,21 @@ class ApiService {
     required String commodity,
     String markets = 'Kampala,Mbarara,Gulu,Kabale,Jinja,Mbale',
     double minMarginPct = 10.0,
+    LiveFlag? source,
   }) async {
-    final d = await _data();
+    final live = await _get(
+      '/markets/arbitrage/${Uri.encodeComponent(commodity.trim())}',
+      {'markets': markets, 'min_margin_pct': '$minMarginPct'},
+      source,
+    );
+    if (live != null) {
+      return (live as List<dynamic>)
+          .map((e) => ArbitrageOpportunity.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    source?.value = false;
+
+    final d = await _offlineData();
     final arbitrage = d['arbitrage'] as Map<String, dynamic>;
     final commodities = (d['commodities'] as List<dynamic>).cast<String>();
     final resolved = _resolve(commodity, commodities) ?? commodity.trim();
@@ -181,6 +319,8 @@ class ApiException implements Exception {
   final String body;
   ApiException(this.statusCode, this.body);
 
+  bool get isOfflineMarketSubstitution => statusCode == ApiService.offlineMarketSubstituted;
+
   @override
-  String toString() => 'ApiException($statusCode): $body';
+  String toString() => isOfflineMarketSubstitution ? body : 'ApiException($statusCode): $body';
 }
