@@ -1,54 +1,57 @@
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart' show rootBundle;
 import '../models/forecast_model.dart';
 import '../models/market_model.dart';
 
-/// Thin HTTP client for the AgriGuard FastAPI backend.
+/// Fully offline data source — no HTTP, no backend, ever.
+///
+/// Keith's PC (where the FastAPI backend normally runs) isn't reachable
+/// while he's out on mobile data, so the whole "point the app at a live
+/// server" approach (LAN IP, network security config, INTERNET permission)
+/// is out. Instead the same commodity/market/arbitrage numbers the backend
+/// would compute are precomputed once (see gen_offline_data.py, run against
+/// the exact same algorithms as backend/app/routers/forecasts.py and
+/// markets.py) and bundled into the APK as assets/data/agriguard_offline_data.json.
+/// This class keeps the ApiService name and every method signature from the
+/// old HTTP client so ForecastScreen/MarketScreen/AlertsScreen don't need to
+/// change at all — only what's behind the interface changed.
+///
+/// Trade-off (confirmed with Keith): forecasts and prices are a snapshot as
+/// of whenever gen_offline_data.py was last run, not live. Re-run it and
+/// rebuild the APK to refresh the bundled numbers.
 class ApiService {
-  final String baseUrl;
+  static const String _assetPath = 'assets/data/agriguard_offline_data.json';
+  static Map<String, dynamic>? _cache;
 
-  /// Resolved once at build/run time from --dart-define=API_BASE_URL=....
-  /// Falls back to the Android Emulator's host alias when not supplied,
-  /// which is only valid on the emulator — never on a real device.
-  static const String _envBaseUrl = String.fromEnvironment('API_BASE_URL');
-
-  ApiService({
-    String? baseUrl,
-  }) : baseUrl = baseUrl ??
-            (_envBaseUrl.isNotEmpty ? _envBaseUrl : 'http://10.0.2.2:8000');
-
-  Future<Map<String, dynamic>> _get(String path, [Map<String, String>? query]) async {
-    final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
-    final res = await http.get(uri).timeout(const Duration(seconds: 25));
-    if (res.statusCode >= 400) {
-      throw ApiException(res.statusCode, res.body);
-    }
-    return jsonDecode(res.body) as Map<String, dynamic>;
+  Future<Map<String, dynamic>> _data() async {
+    if (_cache != null) return _cache!;
+    final raw = await rootBundle.loadString(_assetPath);
+    _cache = jsonDecode(raw) as Map<String, dynamic>;
+    return _cache!;
   }
 
-  /// Same as [_get], for endpoints whose response body is a bare JSON array
-  /// rather than an object (e.g. GET /markets/arbitrage/{commodity}).
-  Future<List<dynamic>> _getList(String path, [Map<String, String>? query]) async {
-    final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
-    final res = await http.get(uri).timeout(const Duration(seconds: 25));
-    if (res.statusCode >= 400) {
-      throw ApiException(res.statusCode, res.body);
+  /// Case/whitespace-insensitive match against the bundled commodity or
+  /// market name list — mirrors the backend's `.strip().title()` normalisation
+  /// so a user typing "maize" or " Maize " still resolves.
+  String? _resolve(String input, List<String> options) {
+    final target = input.trim().toLowerCase();
+    for (final o in options) {
+      if (o.toLowerCase() == target) return o;
     }
-    return jsonDecode(res.body) as List<dynamic>;
+    return null;
   }
 
-  Future<bool> health() async {
-    try {
-      final data = await _get('/health');
-      return data['status'] == 'ok';
-    } catch (_) {
-      return false;
-    }
-  }
+  Future<bool> health() async => true; // always "up" — there's no server to be down.
 
   Future<CommodityList> listCommodities() async {
-    final data = await _get('/forecasts/commodities');
-    return CommodityList.fromJson(data);
+    final d = await _data();
+    final commodities = (d['commodities'] as List<dynamic>).cast<String>();
+    final markets = (d['markets'] as List<dynamic>).cast<String>();
+    return CommodityList(
+      commodities: commodities,
+      markets: markets,
+      totalObservations: (d['forecasts'] as Map<String, dynamic>).length,
+    );
   }
 
   Future<ForecastResponse> getForecast({
@@ -56,11 +59,34 @@ class ApiService {
     String market = 'Kampala',
     int horizon = 14,
   }) async {
-    final data = await _get(
-      '/forecasts/${Uri.encodeComponent(commodity)}',
-      {'market': market, 'horizon': '$horizon'},
+    final d = await _data();
+    final forecasts = d['forecasts'] as Map<String, dynamic>;
+    final commodities = (d['commodities'] as List<dynamic>).cast<String>();
+
+    final resolvedCommodity = _resolve(commodity, commodities) ?? commodity.trim();
+    // Exact commodity+market key first; otherwise any market with data for
+    // this commodity, mirroring the backend's fallback chain in _filter_subset().
+    var key = '$resolvedCommodity|${market.trim()}';
+    if (!forecasts.containsKey(key)) {
+      final fallbackKey = forecasts.keys.firstWhere(
+        (k) => k.startsWith('$resolvedCommodity|'),
+        orElse: () => '',
+      );
+      if (fallbackKey.isEmpty) {
+        throw ApiException(404, 'No price data found for "$commodity".');
+      }
+      key = fallbackKey;
+    }
+    final entry = forecasts[key] as Map<String, dynamic>;
+    final horizons = entry['horizons'] as Map<String, dynamic>;
+
+    // Bundled data only precomputed 7/14/28-day horizons — snap to the
+    // nearest available one rather than erroring on an odd value.
+    final available = horizons.keys.map(int.parse).toList()..sort();
+    final chosen = available.reduce(
+      (a, b) => (a - horizon).abs() <= (b - horizon).abs() ? a : b,
     );
-    return ForecastResponse.fromJson(data);
+    return ForecastResponse.fromJson(horizons['$chosen'] as Map<String, dynamic>);
   }
 
   Future<List<HistoryPoint>> getHistory({
@@ -68,59 +94,85 @@ class ApiService {
     String market = 'Kampala',
     int days = 180,
   }) async {
-    final data = await _get(
-      '/forecasts/history/${Uri.encodeComponent(commodity)}',
-      {'market': market, 'days': '$days'},
-    );
-    final list = data['history'] as List<dynamic>;
-    return list
+    final d = await _data();
+    final forecasts = d['forecasts'] as Map<String, dynamic>;
+    final commodities = (d['commodities'] as List<dynamic>).cast<String>();
+    final resolvedCommodity = _resolve(commodity, commodities) ?? commodity.trim();
+
+    var key = '$resolvedCommodity|${market.trim()}';
+    if (!forecasts.containsKey(key)) {
+      final fallbackKey = forecasts.keys.firstWhere(
+        (k) => k.startsWith('$resolvedCommodity|'),
+        orElse: () => '',
+      );
+      if (fallbackKey.isEmpty) return [];
+      key = fallbackKey;
+    }
+    final entry = forecasts[key] as Map<String, dynamic>;
+    final hist = (entry['history'] as List<dynamic>)
         .map((e) => HistoryPoint.fromJson(e as Map<String, dynamic>))
         .toList();
+    return hist;
   }
 
-  /// GET /markets/summary/{commodity} — cross-market comparison for one
-  /// commodity: best/worst market to sell in, national average, and a
-  /// plain-language recommendation. See CommodityMarketSummary for the
-  /// exact field names this maps from (they don't include top-level
-  /// "best_price"/"worst_price" — those are derived on the model itself).
   Future<CommodityMarketSummary> marketSummary(String commodity) async {
-    final data = await _get('/markets/summary/${Uri.encodeComponent(commodity)}');
-    return CommodityMarketSummary.fromJson(data);
+    final d = await _data();
+    final summaries = d['market_summaries'] as Map<String, dynamic>;
+    final commodities = (d['commodities'] as List<dynamic>).cast<String>();
+    final resolved = _resolve(commodity, commodities) ?? commodity.trim();
+    if (!summaries.containsKey(resolved)) {
+      throw ApiException(404, 'No market data found for "$commodity".');
+    }
+    return CommodityMarketSummary.fromJson(summaries[resolved] as Map<String, dynamic>);
   }
 
-  /// GET /markets/movers — biggest price gainers and losers across all
-  /// commodities and markets over `periodDays`.
   Future<TopMoversResponse> topMovers({int periodDays = 30, int topN = 5}) async {
-    final data = await _get('/markets/movers', {
-      'period_days': '$periodDays',
-      'top_n': '$topN',
+    final d = await _data();
+    final movers = d['top_movers'] as Map<String, dynamic>;
+    // Bundled data was precomputed for a fixed 30-day window and top-5 —
+    // topN just truncates further, periodDays is informational only here.
+    final gainers = (movers['gainers'] as List<dynamic>).take(topN).toList();
+    final losers = (movers['losers'] as List<dynamic>).take(topN).toList();
+    return TopMoversResponse.fromJson({
+      'gainers': gainers,
+      'losers': losers,
+      'period_days': movers['period_days'],
+      'generated_at': movers['generated_at'],
     });
-    return TopMoversResponse.fromJson(data);
   }
 
   Future<Map<String, dynamic>> nationalSummary() async {
-    return _get('/markets/national-summary');
+    final d = await _data();
+    return {'data_as_of': d['data_as_of'], 'generated_at': d['generated_at']};
   }
 
-  /// GET /markets/arbitrage/{commodity} — every buy/sell market pair with a
-  /// gross margin above [minMarginPct], sorted biggest opportunity first.
-  /// The backend raises 404 when nothing clears the threshold and 422 when
-  /// fewer than 2 of the requested markets have price data — both are
-  /// expected outcomes here, not failures, so callers should check for
-  /// those status codes on the thrown [ApiException] rather than treating
-  /// every error the same way (see market_screen.dart for the pattern).
   Future<List<ArbitrageOpportunity>> arbitrageOpportunities({
     required String commodity,
     String markets = 'Kampala,Mbarara,Gulu,Kabale,Jinja,Mbale',
     double minMarginPct = 10.0,
   }) async {
-    final data = await _getList(
-      '/markets/arbitrage/${Uri.encodeComponent(commodity)}',
-      {'markets': markets, 'min_margin_pct': '$minMarginPct'},
-    );
-    return data
+    final d = await _data();
+    final arbitrage = d['arbitrage'] as Map<String, dynamic>;
+    final commodities = (d['commodities'] as List<dynamic>).cast<String>();
+    final resolved = _resolve(commodity, commodities) ?? commodity.trim();
+
+    if (!arbitrage.containsKey(resolved)) {
+      throw ApiException(
+        404,
+        'No arbitrage opportunities found for "$commodity" above ${minMarginPct.toStringAsFixed(0)}%.',
+      );
+    }
+    final list = (arbitrage[resolved] as List<dynamic>)
         .map((e) => ArbitrageOpportunity.fromJson(e as Map<String, dynamic>))
+        .where((o) => o.grossMarginPct >= minMarginPct)
         .toList();
+    if (list.isEmpty) {
+      throw ApiException(
+        404,
+        'No arbitrage opportunities found for "$commodity" above ${minMarginPct.toStringAsFixed(0)}%.',
+      );
+    }
+    return list;
   }
 }
 
