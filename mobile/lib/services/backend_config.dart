@@ -11,26 +11,34 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// production build, so it has been removed from the UI entirely.
 ///
 /// What ships now:
-///   1. [productionBaseUrl] — a single baked-in constant. Fill this in once
-///      you deploy the FastAPI backend (Render / Railway / Fly.io / your own
-///      server) and rebuild. Every user gets live data automatically; no
-///      one ever sees or edits this value.
+///   1. [productionBaseUrl] — baked in at BUILD time via
+///      `--dart-define=AGRIGUARD_BACKEND_URL=...`, not hand-edited source.
+///      This is what makes every APK built by .github/workflows/build-apk.yml
+///      — whether triggered by a push or run manually via "Run workflow" —
+///      wire up to the live backend automatically: the workflow passes the
+///      AGRIGUARD_BACKEND_URL repository variable into the build step, so
+///      there is nothing to edit or commit here when the backend's URL
+///      changes (redeploy, new host, etc.) — just update that one repo
+///      variable and the next build picks it up. A local
+///      `flutter build apk --dart-define=AGRIGUARD_BACKEND_URL=...` works
+///      the same way outside CI. Omit the define entirely (e.g. a plain
+///      `flutter run` during development) and this falls back to ''.
 ///   2. A hidden developer override, reachable only by tapping the version
 ///      number in Settings → About seven times (the same pattern Android
 ///      itself uses for "Developer options"). This is for your own
 ///      on-device testing against a local server and is not documented or
-///      discoverable anywhere in the normal UI.
+///      discoverable anywhere in the normal UI, and always wins over #1
+///      when set (see [getBaseUrl]).
 ///
 /// If neither is set/reachable, [ApiService] silently serves the bundled
 /// offline snapshot — the app always works, it just isn't live.
 class BackendConfig {
   BackendConfig._();
 
-  /// Fill this in once the backend is deployed, e.g.
-  /// 'https://agriguard-api.onrender.com'. Leave empty during development —
-  /// the app will run entirely on the bundled offline data plus whatever
-  /// you set via the hidden developer override below.
-  static const String productionBaseUrl = '';
+  /// Baked in at build time — see class doc. Empty string means "no
+  /// AGRIGUARD_BACKEND_URL was passed to this build".
+  static const String productionBaseUrl =
+      String.fromEnvironment('AGRIGUARD_BACKEND_URL', defaultValue: '');
 
   static const _devOverrideKey = 'agriguard_dev_backend_override';
   static String? _cachedOverride;

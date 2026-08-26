@@ -2,9 +2,14 @@
 backend/app/services/fews_net_sync.py — Live sync for FEWS NET (FDW) prices
 ================================================================================
 Why this exists: WFP's Uganda price CSV (services/wfp_sync.py) is the deep
-historical backbone (2018–present, 10 markets) but is itself only updated
-monthly upstream and sometimes lags by several weeks before HDX republishes
-it. FEWS NET's Data Warehouse (FDW) tracks largely the same staple-food
+historical backbone — HDX's "Uganda - Food Prices" resource actually spans
+2006–present (confirmed against the live resource_show metadata on
+2026-08-26; earlier revisions of this docstring undersold it as "2018–
+present", which was never true of the upstream data itself — see
+scripts/download_wfp_data.py for the one place that WAS artificially
+short, now fixed to match) — but is itself only updated monthly upstream
+and sometimes lags by several weeks before HDX republishes it. FEWS NET's
+Data Warehouse (FDW) tracks largely the same staple-food
 markets in Uganda but is a separate collection pipeline with its own update
 cadence, so blending it in gives AgriGuard a second, independent check on
 "what are prices doing right now" instead of relying on one upstream source.

@@ -74,7 +74,18 @@ def try_hdx_download() -> bool:
 
 def generate_synthetic_data() -> None:
     """
-    Generate realistic Uganda food price data (2018-present).
+    Generate realistic Uganda food price data (2006-present).
+
+    2006 matches the real depth of HDX's "Uganda - Food Prices" resource
+    (confirmed via its live resource_show metadata on 2026-08-26 — the
+    actual dataset is ~20 years deep, not the 2018-only window this
+    fallback used to synthesize). This function only ever runs when the
+    live HDX download fails, so the synthetic fallback should give
+    training scripts the same ~20-year depth the real data normally
+    provides, not a shorter substitute — a model trained on a thin,
+    2018-only fallback window would silently be worse than one trained
+    on the real download, with nothing in its output flagging why.
+
     Columns mirror the WFP Global Food Prices schema so training
     scripts work identically against real or synthetic data.
     """
@@ -82,7 +93,7 @@ def generate_synthetic_data() -> None:
     rng = np.random.default_rng(42)
     rows = []
 
-    start = datetime(2018, 1, 1)
+    start = datetime(2006, 1, 1)
     end   = datetime.now().replace(day=1)
     months = []
     cur = start

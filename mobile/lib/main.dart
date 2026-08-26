@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'screens/forecast_screen.dart';
 import 'screens/market_screen.dart';
 import 'screens/alerts_screen.dart';
+import 'screens/weather_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/api_service.dart';
 import 'services/connectivity_service.dart';
@@ -50,6 +51,7 @@ class _HomeShellState extends State<HomeShell> {
     ForecastScreen(),
     MarketScreen(),
     AlertsScreen(),
+    WeatherScreen(),
     SettingsScreen(),
   ];
 
@@ -75,6 +77,11 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.notifications_outlined),
             selectedIcon: Icon(Icons.notifications),
             label: 'Alerts',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.cloud_outlined),
+            selectedIcon: Icon(Icons.cloud),
+            label: 'Weather',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
