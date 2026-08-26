@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 import '../models/forecast_model.dart';
 import '../models/market_model.dart';
+import '../models/weather_model.dart';
 import 'backend_config.dart';
 
 /// Mutable out-parameter a caller can pass to any ApiService method to find
@@ -396,6 +397,54 @@ class ApiService {
       );
     }
     return list;
+  }
+
+  /// Drought-stress signal per market (backend/app/routers/weather.py ::
+  /// GET /weather/analytics/drought-risk). No offline fallback exists for
+  /// this — the bundled snapshot (assets/data/agriguard_offline_data.json)
+  /// predates the weather feature and carries no weather data at all — so
+  /// unlike every other ApiService method above, a null/failed live call
+  /// here means "genuinely unavailable right now", not "serve the stale
+  /// snapshot". Callers should show that honestly rather than inventing
+  /// numbers, same spirit as the rest of this file's live-vs-offline
+  /// discipline.
+  Future<DroughtRiskResponse?> droughtRisk({
+    int lookbackDays = 30,
+    double deficitThresholdMm = -3.0,
+    LiveFlag? source,
+  }) async {
+    final live = await _get(
+      '/weather/analytics/drought-risk',
+      {
+        'lookback_days': '$lookbackDays',
+        'deficit_threshold_mm': '$deficitThresholdMm',
+      },
+      source,
+    );
+    if (live == null) return null;
+    return DroughtRiskResponse.fromJson(live as Map<String, dynamic>);
+  }
+
+  /// Heavy-rain / flood early warning (backend/app/routers/weather.py ::
+  /// GET /weather/alerts/heavy-rain). Same no-offline-fallback caveat as
+  /// [droughtRisk] above.
+  Future<HeavyRainAlertResponse?> heavyRainAlerts({
+    double thresholdMm = 50.0,
+    int lookbackDays = 7,
+    bool includeForecast = true,
+    LiveFlag? source,
+  }) async {
+    final live = await _get(
+      '/weather/alerts/heavy-rain',
+      {
+        'threshold_mm': '$thresholdMm',
+        'lookback_days': '$lookbackDays',
+        'include_forecast': '$includeForecast',
+      },
+      source,
+    );
+    if (live == null) return null;
+    return HeavyRainAlertResponse.fromJson(live as Map<String, dynamic>);
   }
 }
 
