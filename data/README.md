@@ -66,7 +66,39 @@ dataset grows materially (multi-year backfill, more markets), move to
 Git LFS or re-download on CI rather than growing this file indefinitely
 in normal git history.
 
-## 2. `raw/weather/` and `processed/weather/` — collected, not yet integrated
+## 2. `raw/fews_net_prices_uga.csv` — supplementary live(r) price feed
+
+**Source:** [FEWS NET Data Warehouse (FDW)](https://fdw.fews.net/api/marketpricefacts.csv?country_code=UG)
+— free, no account required for public data (`FEWS_NET_USERNAME`/`PASSWORD`
+in `config/.env` are only needed for permissioned series). See
+[FDW API docs](https://help.fews.net/fdw/fews-net-api) for the full filter
+reference. Synced by `backend/app/services/fews_net_sync.py`.
+
+**Why it exists alongside the WFP CSV above:** WFP is the deep historical
+backbone (2018–present) but is itself only refreshed monthly upstream and
+can lag before HDX republishes. FEWS NET tracks largely the same Uganda
+staple-food markets through an independent collection pipeline, so blending
+it in (see `load_price_data()` in `backend/app/routers/{forecasts,markets}.py`)
+gives a second, fresher check on current prices without discarding WFP's
+history. On any (market, commodity, date) both feeds cover, FEWS NET's value
+wins.
+
+**Scope:** only the last `FEWS_NET_LOOKBACK_DAYS` (default 730) is pulled —
+this file is deliberately shallow. It is not meant to stand alone; if it's
+missing or fails to sync, `load_price_data()` falls back to WFP-only, same
+as before this feed existed.
+
+**Schema:** normalised to the same `date, commodity, market, price, currency,
+unit, price_type` shape as the WFP CSV (plus a `source` column set to
+`FEWS_NET`) so both feeds can be concatenated directly — see
+`_normalise()` in `fews_net_sync.py` for the exact FDW column mapping.
+
+**Refresh:** automatic on a `FEWS_NET_SYNC_INTERVAL_HOURS` schedule (default
+6h) once the backend is running, or on demand via
+`POST /forecasts/sync/fews-net`. Not committed to the repo — it's a live
+cache, regenerated on first sync in any environment.
+
+## 3. `raw/weather/` and `processed/weather/` — collected, not yet integrated
 
 `scripts/fetch_weather.py` pulls daily weather (temperature, rainfall,
 humidity, wind, evapotranspiration, plus a derived water-balance proxy) from

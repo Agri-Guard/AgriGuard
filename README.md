@@ -224,7 +224,8 @@ Issues before wiring it in.
 
 ## Data Sources
 
-- **[WFP VAM Food Prices — Uganda](https://data.humdata.org/dataset/wfp-food-prices-for-uganda)** (HDX, open license) — historical crop prices, 10 markets, 8 commodities, 2018–present
+- **[WFP VAM Food Prices — Uganda](https://data.humdata.org/dataset/wfp-food-prices-for-uganda)** (HDX, open license) — historical crop prices, 10 markets, 8 commodities, 2018–present. Live-synced every `WFP_SYNC_INTERVAL_HOURS` — see `backend/app/services/wfp_sync.py`.
+- **[FEWS NET Data Warehouse (FDW)](https://fdw.fews.net/api/marketpricefacts.csv?country_code=UG)** — supplementary, fresher-cadence Uganda market price feed blended on top of WFP wherever the two overlap (FEWS NET wins on overlap). Free, no account required for public data. Live-synced every `FEWS_NET_SYNC_INTERVAL_HOURS` — see `backend/app/services/fews_net_sync.py` and [API docs](https://help.fews.net/fdw/fews-net-api).
 - **[Open-Meteo](https://open-meteo.com)** — free daily weather + 16-day forecast, no API key required, currently 8 of 10 markets covered
 
 Full schema, provenance, and refresh commands: `data/README.md`.
@@ -498,7 +499,8 @@ Issues before wiring it in.
 
 ## Data Sources
 
-- **[WFP VAM Food Prices — Uganda](https://data.humdata.org/dataset/wfp-food-prices-for-uganda)** (HDX, open license) — historical crop prices, 10 markets, 8 commodities, 2018–present
+- **[WFP VAM Food Prices — Uganda](https://data.humdata.org/dataset/wfp-food-prices-for-uganda)** (HDX, open license) — historical crop prices, 10 markets, 8 commodities, 2018–present. Live-synced every `WFP_SYNC_INTERVAL_HOURS` — see `backend/app/services/wfp_sync.py`.
+- **[FEWS NET Data Warehouse (FDW)](https://fdw.fews.net/api/marketpricefacts.csv?country_code=UG)** — supplementary, fresher-cadence Uganda market price feed blended on top of WFP wherever the two overlap (FEWS NET wins on overlap). Free, no account required for public data. Live-synced every `FEWS_NET_SYNC_INTERVAL_HOURS` — see `backend/app/services/fews_net_sync.py` and [API docs](https://help.fews.net/fdw/fews-net-api).
 - **[Open-Meteo](https://open-meteo.com)** — free daily weather + 16-day forecast, no API key required, currently 8 of 10 markets covered
 
 Full schema, provenance, and refresh commands: `data/README.md`.

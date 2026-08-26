@@ -4,7 +4,8 @@ app/routers/forecasts.py — AgriGuard Price Forecasting Router
 FastAPI router exposing agricultural price forecasting endpoints.
 
 Forecast pipeline:
-  1. Load and clean WFP Uganda price CSV  (load_price_data)
+  1. Load and clean WFP Uganda price CSV, blended with the fresher-cadence
+     FEWS NET (FDW) feed where the two overlap  (load_price_data)
   2. Filter to the requested commodity × market combination
   3. Run Prophet (primary) or linear extrapolation (fallback)
   4. Optionally blend with XGBoost residual correction if enough data
@@ -42,6 +43,7 @@ Author: AgriGuard Team
 import logging
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -49,7 +51,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
-from backend.app.services import wfp_sync
+from backend.app.services import wfp_sync, fews_net_sync
 
 logger = logging.getLogger(__name__)
 
@@ -147,11 +149,18 @@ class SyncTriggerResponse(BaseModel):
     status: SyncStatusResponse
 
 
+class FewsNetSyncStatusResponse(BaseModel):
+    """Status of the background FEWS NET price-data sync (see services/fews_net_sync.py)."""
+    row_count: Optional[int] = None       # Observations in the last synced FEWS NET extract
+    max_date: Optional[str] = None        # Most recent date covered by that extract
+    synced_at: Optional[str] = None       # When we last pulled a fresh copy (UTC ISO-8601)
+
+
 # =============================================================================
 # Data loading and cleaning
 # =============================================================================
 
-def load_price_data() -> pd.DataFrame:
+def _load_wfp_csv() -> pd.DataFrame:
     """
     Load the WFP Uganda price CSV and return a cleaned, standardised DataFrame.
 
@@ -159,17 +168,10 @@ def load_price_data() -> pd.DataFrame:
     This function normalises them all to a consistent schema:
       date, commodity, market, price, currency, unit
 
-    Cached after first successful load — the CSV is static for the lifetime
-    of the process, and re-parsing it on every request (thousands of rows)
-    was adding unnecessary latency on top of the Prophet/XGBoost fit cost.
-
     Raises:
         HTTPException 503 if the file is missing.
         HTTPException 500 if required columns cannot be found after normalisation.
     """
-    if load_price_data._cache is not None:
-        return load_price_data._cache
-
     try:
         df = pd.read_csv(DATA_PATH, low_memory=False)
     except FileNotFoundError:
@@ -238,10 +240,81 @@ def load_price_data() -> pd.DataFrame:
         if not retail.empty:
             df = retail
 
+    df["source"] = "WFP"
     logger.info(
-        "Loaded %d price observations from %s", len(df), os.path.basename(DATA_PATH)
+        "Loaded %d WFP price observations from %s", len(df), os.path.basename(DATA_PATH)
     )
-    df = df.reset_index(drop=True)
+    return df.reset_index(drop=True)
+
+
+def _load_fews_net_csv() -> Optional[pd.DataFrame]:
+    """
+    Load the (already-normalised) FEWS NET CSV written by
+    services/fews_net_sync.py, if a validated one has ever synced.
+    Returns None rather than raising — FEWS NET is a supplementary feed,
+    not a hard dependency: a missing/stale file just means load_price_data()
+    falls back to WFP-only, exactly like before this feed existed.
+    """
+    fews_path = Path(fews_net_sync.DATA_PATH)
+    if not fews_path.exists():
+        return None
+    try:
+        df = pd.read_csv(fews_path, low_memory=False, parse_dates=["date"])
+    except Exception as exc:
+        logger.warning("FEWS NET dataset present but unreadable — skipping blend: %s", exc)
+        return None
+
+    required = {"date", "commodity", "market", "price"}
+    missing = required - set(df.columns)
+    if missing:
+        logger.warning("FEWS NET dataset missing columns %s — skipping blend.", sorted(missing))
+        return None
+
+    df["source"] = "FEWS_NET"
+    logger.info("Loaded %d FEWS NET price observations from %s", len(df), fews_path.name)
+    return df
+
+
+def load_price_data() -> pd.DataFrame:
+    """
+    Build the working price DataFrame: WFP's deep history blended with
+    FEWS NET's fresher, shallow-history feed where the two overlap on
+    (market, commodity, date).
+
+    On overlap, FEWS NET wins — it's the feed we sync more aggressively for
+    freshness, so if both sources reported the same market/commodity/date,
+    FEWS NET's number is the one more likely to reflect an up-to-date
+    collection pass rather than a delayed upstream republish. Everywhere
+    FEWS NET has no coverage (older history, or markets/commodities it
+    doesn't track), WFP fills the gap untouched.
+
+    Cached after first successful load — invalidated by either
+    wfp_sync.sync_if_updated() or fews_net_sync.sync_if_updated() when they
+    install new data, so a request right after a sync always sees it fresh.
+
+    Raises:
+        HTTPException 503 if the WFP file is missing.
+        HTTPException 500 if required columns cannot be found after normalisation.
+    """
+    if load_price_data._cache is not None:
+        return load_price_data._cache
+
+    wfp_df = _load_wfp_csv()
+    fews_df = _load_fews_net_csv()
+
+    if fews_df is None or fews_df.empty:
+        df = wfp_df
+    else:
+        combined = pd.concat([fews_df, wfp_df], ignore_index=True)
+        # fews_df listed first: drop_duplicates(keep="first") means FEWS NET
+        # wins any (market, commodity, date) collision, per the docstring above.
+        df = combined.drop_duplicates(subset=["market", "commodity", "date"], keep="first")
+        df = df.sort_values("date").reset_index(drop=True)
+        logger.info(
+            "Blended price data: %d WFP + %d FEWS NET -> %d observations after overlap resolution",
+            len(wfp_df), len(fews_df), len(df),
+        )
+
     load_price_data._cache = df
     return df
 
@@ -673,6 +746,28 @@ def trigger_sync(force: bool = Query(default=False, description="Skip the metada
         detail=detail,
         status=SyncStatusResponse(**wfp_sync.last_sync_info()),
     )
+
+
+@router.get("/sync/fews-net/status", response_model=FewsNetSyncStatusResponse)
+def get_fews_net_sync_status():
+    """
+    When was the supplementary FEWS NET feed last synced, and what it
+    covered at that time. No network call — reads the local sync-state file.
+    """
+    return FewsNetSyncStatusResponse(**fews_net_sync.last_sync_info())
+
+
+@router.post("/sync/fews-net", response_model=FewsNetSyncStatusResponse)
+def trigger_fews_net_sync(force: bool = Query(default=False, description="Re-fetch and re-validate even if nothing looks changed")):
+    """
+    On-demand version of the background FEWS NET sync job (see
+    services/fews_net_sync.py and its scheduled run in main.py's startup
+    handler). Fetches the FDW extract for the configured lookback window,
+    validates it, and — only if it's new or `force=true` — swaps it in and
+    clears the forecast cache so the next request blends it immediately.
+    """
+    fews_net_sync.sync_if_updated(force=force)
+    return FewsNetSyncStatusResponse(**fews_net_sync.last_sync_info())
 
 
 @router.get("/commodities", response_model=CommodityListResponse)

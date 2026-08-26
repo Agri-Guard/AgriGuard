@@ -49,12 +49,15 @@ Author: AgriGuard Team
 import logging
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+from backend.app.services import fews_net_sync
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +285,31 @@ def load_price_data() -> pd.DataFrame:
         if not retail.empty:
             df = retail
 
-    return df.reset_index(drop=True)
+    df["source"] = "WFP"
+    df = df.reset_index(drop=True)
+
+    # Blend in the fresher-cadence FEWS NET feed (see
+    # backend/app/services/fews_net_sync.py and forecasts.py::load_price_data
+    # for the same pattern with fuller commentary). On overlap FEWS NET wins;
+    # FEWS NET doesn't carry a region column, so those rows simply have
+    # region=None like any other WFP row missing region already does.
+    fews_path = Path(fews_net_sync.DATA_PATH)
+    if fews_path.exists():
+        try:
+            fews_df = pd.read_csv(fews_path, low_memory=False, parse_dates=["date"])
+            if "region" not in fews_df.columns:
+                fews_df["region"] = None
+            fews_df["source"] = "FEWS_NET"
+            required_fews = {"date", "commodity", "market", "price"}
+            if required_fews.issubset(fews_df.columns) and not fews_df.empty:
+                combined = pd.concat([fews_df, df], ignore_index=True)
+                df = combined.drop_duplicates(
+                    subset=["market", "commodity", "date"], keep="first"
+                ).sort_values("date").reset_index(drop=True)
+        except Exception as exc:
+            logger.warning("FEWS NET dataset present but could not be blended in markets.py: %s", exc)
+
+    return df
 
 
 # =============================================================================

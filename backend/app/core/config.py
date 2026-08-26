@@ -45,6 +45,25 @@ class Settings:
     wfp_sync_enabled: bool = os.getenv("WFP_SYNC_ENABLED", "true").lower() == "true"
     wfp_sync_interval_hours: float = float(os.getenv("WFP_SYNC_INTERVAL_HOURS", "6"))
 
+    # FEWS NET Data Warehouse (FDW) — supplementary, fresher-cadence price feed
+    # blended on top of WFP (see backend/app/services/fews_net_sync.py). WFP
+    # remains the historical backbone; FEWS NET fills in more recent months.
+    fews_net_data_path: str = os.getenv(
+        "AGRIGUARD_FEWS_NET_DATA",
+        str(ROOT / "data" / "raw" / "fews_net_prices_uga.csv"),
+    )
+    fews_net_sync_enabled: bool = os.getenv("FEWS_NET_SYNC_ENABLED", "true").lower() == "true"
+    fews_net_sync_interval_hours: float = float(os.getenv("FEWS_NET_SYNC_INTERVAL_HOURS", "6"))
+    # Optional — FDW returns public-only data with no credentials, which is
+    # sufficient for Uganda staple food prices. Set these to unlock any
+    # permissioned series the account has access to.
+    fews_net_username: str = os.getenv("FEWS_NET_USERNAME", "")
+    fews_net_password: str = os.getenv("FEWS_NET_PASSWORD", "")
+    # How far back to pull on each sync. FDW's full history isn't needed here
+    # (WFP already covers it) — this just keeps requests small and the feed
+    # focused on what it's actually for: recent, fresher-than-WFP prices.
+    fews_net_lookback_days: int = int(os.getenv("FEWS_NET_LOOKBACK_DAYS", "730"))
+
     # Anthropic
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
 

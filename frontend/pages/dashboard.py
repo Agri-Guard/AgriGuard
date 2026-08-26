@@ -301,20 +301,38 @@ else:
         unsafe_allow_html=True,
     )
 
-# ── Live WFP price-data sync status ────────────────────────────────────────
+# ── Live price-data sync status — WFP (deep history) + FEWS NET (fresher) ──
 sync_status, sync_status_err = api("GET", "/forecasts/sync/status", base_url)
 with st.sidebar.expander("🔄 Price data sync", expanded=False):
+    st.caption("**WFP** (historical backbone)")
     if sync_status and sync_status.get("synced_at"):
         st.caption(f"Last synced: {sync_status['synced_at'][:19].replace('T', ' ')} UTC")
     else:
         st.caption("Not yet synced from HDX in this environment — using bundled/initial data.")
-    if st.button("Check for updates now", use_container_width=True):
+    if st.button("Check for updates now", use_container_width=True, key="wfp_sync_btn"):
         with st.spinner("Checking HDX for a newer Uganda food-price dataset…"):
             sync_result, sync_err = api("POST", "/forecasts/sync", base_url)
         if sync_result:
             st.success(sync_result["detail"]) if sync_result["updated"] else st.info(sync_result["detail"])
         else:
             st.error(f"Sync check failed: {sync_err}")
+
+    st.divider()
+
+    st.caption("**FEWS NET** (fresher, blended on top of WFP)")
+    fews_status, fews_status_err = api("GET", "/forecasts/sync/fews-net/status", base_url)
+    if fews_status and fews_status.get("synced_at"):
+        st.caption(f"Last synced: {fews_status['synced_at'][:19].replace('T', ' ')} UTC")
+        st.caption(f"Coverage through: {fews_status.get('max_date', '—')}")
+    else:
+        st.caption("Not yet synced in this environment — forecasts are WFP-only until the first sync.")
+    if st.button("Check for updates now", use_container_width=True, key="fews_net_sync_btn"):
+        with st.spinner("Checking FEWS NET (FDW) for fresher Uganda market prices…"):
+            fews_result, fews_err = api("POST", "/forecasts/sync/fews-net", base_url)
+        if fews_result:
+            st.success(f"Synced — {fews_result.get('row_count', 0)} observations through {fews_result.get('max_date', '—')}")
+        else:
+            st.error(f"Sync check failed: {fews_err}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Forecast Settings")
