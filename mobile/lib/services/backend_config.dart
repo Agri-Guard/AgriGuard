@@ -1,42 +1,70 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Where the app looks for a live AgriGuard backend, persisted across
-/// launches. Same idea as the "Backend URL" field on the desktop dashboard
-/// (default `http://localhost:8000`) — except a phone is never on the same
-/// machine as the FastAPI process, so there is no safe default to ship here.
+/// Where the app looks for the live AgriGuard backend.
 ///
-/// Empty means "no backend configured": [ApiService] skips the network
-/// entirely and serves the bundled offline snapshot, instead of burning a
-/// timeout on every screen load.
+/// IMPORTANT — intellectual-property note:
+/// Earlier builds exposed a raw "Backend URL" text field (with emulator
+/// aliases, LAN-IP instructions, etc.) directly in Settings. That leaks
+/// infrastructure details — hostnames, ports, hosting provider — to anyone
+/// who opens the app, which is unnecessary and gives away information about
+/// how AgriGuard is deployed for free. None of that belongs in a
+/// production build, so it has been removed from the UI entirely.
+///
+/// What ships now:
+///   1. [productionBaseUrl] — a single baked-in constant. Fill this in once
+///      you deploy the FastAPI backend (Render / Railway / Fly.io / your own
+///      server) and rebuild. Every user gets live data automatically; no
+///      one ever sees or edits this value.
+///   2. A hidden developer override, reachable only by tapping the version
+///      number in Settings → About seven times (the same pattern Android
+///      itself uses for "Developer options"). This is for your own
+///      on-device testing against a local server and is not documented or
+///      discoverable anywhere in the normal UI.
+///
+/// If neither is set/reachable, [ApiService] silently serves the bundled
+/// offline snapshot — the app always works, it just isn't live.
 class BackendConfig {
-  static const _key = 'agriguard_backend_url';
-  static String? _cached;
+  BackendConfig._();
 
-  /// Common presets shown in the Settings screen. `10.0.2.2` is the Android
-  /// emulator's alias for the host machine's `localhost`; a real phone needs
-  /// either the dev machine's LAN IP (see network_security_config.xml) or a
-  /// publicly reachable HTTPS URL (e.g. the backend deployed to Render /
-  /// Railway / Fly.io) to work off Keith's Wi-Fi.
-  static const presets = <String, String>{
-    'Android emulator (this machine)': 'http://10.0.2.2:8000',
-    'Not configured (offline only)': '',
-  };
+  /// Fill this in once the backend is deployed, e.g.
+  /// 'https://agriguard-api.onrender.com'. Leave empty during development —
+  /// the app will run entirely on the bundled offline data plus whatever
+  /// you set via the hidden developer override below.
+  static const String productionBaseUrl = '';
+
+  static const _devOverrideKey = 'agriguard_dev_backend_override';
+  static String? _cachedOverride;
 
   static Future<String> getBaseUrl() async {
-    if (_cached != null) return _cached!;
-    final prefs = await SharedPreferences.getInstance();
-    _cached = prefs.getString(_key) ?? '';
-    return _cached!;
+    final override = await _getDevOverride();
+    if (override != null && override.isNotEmpty) return override;
+    return productionBaseUrl;
   }
 
-  static Future<void> setBaseUrl(String url) async {
-    final trimmed = url.trim().replaceAll(RegExp(r'/+$'), ''); // no trailing slash
+  static Future<String?> _getDevOverride() async {
+    if (_cachedOverride != null) return _cachedOverride;
+    final prefs = await SharedPreferences.getInstance();
+    _cachedOverride = prefs.getString(_devOverrideKey) ?? '';
+    return _cachedOverride;
+  }
+
+  /// Developer-only: set a local override (e.g. `http://10.0.2.2:8000` for
+  /// the Android emulator, or your dev machine's LAN IP). Reached only via
+  /// the hidden long-tap gesture in Settings — never surfaced as a normal
+  /// setting.
+  static Future<void> setDevOverride(String url) async {
+    final trimmed = url.trim().replaceAll(RegExp(r'/+$'), '');
     final prefs = await SharedPreferences.getInstance();
     if (trimmed.isEmpty) {
-      await prefs.remove(_key);
+      await prefs.remove(_devOverrideKey);
     } else {
-      await prefs.setString(_key, trimmed);
+      await prefs.setString(_devOverrideKey, trimmed);
     }
-    _cached = trimmed;
+    _cachedOverride = trimmed;
+  }
+
+  static Future<bool> hasDevOverride() async {
+    final v = await _getDevOverride();
+    return v != null && v.isNotEmpty;
   }
 }

@@ -54,8 +54,16 @@ class ForecastResponse {
   final String trend; // "rising" | "falling" | "stable"
   final double pctChange; // predicted % change over the horizon
   final String? alert; // human-readable warning if pctChange is large
-  final String modelUsed; // "prophet" | "prophet+xgb" | "linear"
+  final String modelUsed; // "prophet" | "prophet+xgb" | "linear" — internal only, never shown to users
   final String generatedAt;
+
+  /// Set client-side (never from the JSON payload) when the offline
+  /// snapshot didn't have data for the exact market that was requested and
+  /// substituted the nearest one it did have. Non-null means "this is still
+  /// good data, just for [substitutedFromMarket] instead of what was asked
+  /// for" — screens can show a small informational note instead of
+  /// discarding the forecast entirely.
+  final String? substitutedFromMarket;
 
   ForecastResponse({
     required this.commodity,
@@ -70,7 +78,41 @@ class ForecastResponse {
     this.alert,
     required this.modelUsed,
     required this.generatedAt,
+    this.substitutedFromMarket,
   });
+
+  /// Copy with a substitution note attached — used by ApiService when the
+  /// offline snapshot serves a different market than requested.
+  ForecastResponse withSubstitutionNote(String requestedMarket) {
+    return ForecastResponse(
+      commodity: commodity,
+      market: market,
+      currency: currency,
+      unit: unit,
+      horizonDays: horizonDays,
+      observationsUsed: observationsUsed,
+      forecast: forecast,
+      trend: trend,
+      pctChange: pctChange,
+      alert: alert,
+      modelUsed: modelUsed,
+      generatedAt: generatedAt,
+      substitutedFromMarket: requestedMarket,
+    );
+  }
+
+  /// Farmer-friendly label for the forecasting confidence — deliberately
+  /// abstracted away from [modelUsed] (which model / library ran under the
+  /// hood is internal implementation detail, not something to expose in the
+  /// UI).
+  String get confidenceLabel {
+    final avg = forecast.isEmpty
+        ? 0.0
+        : forecast.map((p) => p.confidence).reduce((a, b) => a + b) / forecast.length;
+    if (avg >= 0.85) return 'High confidence';
+    if (avg >= 0.6) return 'Moderate confidence';
+    return 'Low confidence';
+  }
 
   factory ForecastResponse.fromJson(Map<String, dynamic> json) {
     final points = (json['forecast'] as List<dynamic>? ?? [])

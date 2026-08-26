@@ -1,8 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/api_service.dart';
-import '../services/backend_config.dart';
 
+import '../offline/local_cache.dart';
+import '../services/backend_config.dart';
+import '../services/connectivity_service.dart';
+import '../services/preferences_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_scaffold.dart';
+
+/// User-facing settings only.
+///
+/// This screen deliberately does NOT expose backend URLs, IPs, hostnames,
+/// model/library names, or any other implementation detail — see the
+/// header comment in `backend_config.dart` for why. Everything here is
+/// something an ordinary farmer/trader using the app would actually want
+/// to control.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -11,163 +23,269 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final _urlCtrl = TextEditingController();
-  bool _testing = false;
-  bool? _lastTestOk;
-  String? _savedUrl;
+  bool _notifications = true;
+  String? _preferredMarket;
+  List<String> _watchlist = [];
+  final _marketCtrl = TextEditingController();
+  final _addCropCtrl = TextEditingController();
+  int _versionTaps = 0;
 
   @override
   void initState() {
     super.initState();
-    BackendConfig.getBaseUrl().then((url) {
-      setState(() {
-        _urlCtrl.text = url;
-        _savedUrl = url;
-      });
-    });
+    _loadPrefs();
   }
 
   @override
   void dispose() {
-    _urlCtrl.dispose();
+    _marketCtrl.dispose();
+    _addCropCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _save() async {
-    await BackendConfig.setBaseUrl(_urlCtrl.text);
+  Future<void> _loadPrefs() async {
+    final notifications = await PreferencesService.getNotificationsEnabled();
+    final market = await PreferencesService.getPreferredMarket();
+    final watchlist = await PreferencesService.getWatchlist();
+    if (!mounted) return;
     setState(() {
-      _savedUrl = _urlCtrl.text.trim();
-      _lastTestOk = null;
+      _notifications = notifications;
+      _preferredMarket = market;
+      _marketCtrl.text = market ?? '';
+      _watchlist = watchlist;
     });
+  }
+
+  Future<void> _saveMarket() async {
+    await PreferencesService.setPreferredMarket(_marketCtrl.text);
+    if (!mounted) return;
+    setState(() => _preferredMarket = _marketCtrl.text.trim().isEmpty ? null : _marketCtrl.text.trim());
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Preferred market saved.')),
+    );
+  }
+
+  Future<void> _toggleNotifications(bool v) async {
+    setState(() => _notifications = v);
+    await PreferencesService.setNotificationsEnabled(v);
+  }
+
+  Future<void> _addCrop() async {
+    final crop = _addCropCtrl.text.trim();
+    if (crop.isEmpty || _watchlist.contains(crop)) return;
+    final updated = [..._watchlist, crop];
+    await PreferencesService.setWatchlist(updated);
+    setState(() {
+      _watchlist = updated;
+      _addCropCtrl.clear();
+    });
+  }
+
+  Future<void> _removeCrop(String crop) async {
+    final updated = _watchlist.where((c) => c != crop).toList();
+    await PreferencesService.setWatchlist(updated);
+    setState(() => _watchlist = updated);
+  }
+
+  Future<void> _clearCache() async {
+    await LocalCache().clear();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          _savedUrl!.isEmpty
-              ? 'Cleared — running on bundled offline data only.'
-              : 'Saved. AgriGuard will use $_savedUrl for live prices.',
+      const SnackBar(content: Text('Offline cache cleared.')),
+    );
+  }
+
+  void _handleVersionTap() async {
+    _versionTaps++;
+    if (_versionTaps >= 7) {
+      _versionTaps = 0;
+      await _showDevOverrideDialog();
+    }
+  }
+
+  /// Hidden, undocumented developer entry point — not part of the normal
+  /// settings surface. Reached only by tapping the version number in About
+  /// seven times, mirroring Android's own "Developer options" pattern.
+  Future<void> _showDevOverrideDialog() async {
+    final hasOverride = await BackendConfig.hasDevOverride();
+    final ctrl = TextEditingController(text: hasOverride ? await BackendConfig.getBaseUrl() : '');
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Developer override'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(
+            labelText: 'Backend URL',
+            hintText: 'http://10.0.2.2:8000',
+          ),
+          keyboardType: TextInputType.url,
+          autocorrect: false,
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await BackendConfig.setDevOverride(ctrl.text);
+              if (ctx.mounted) Navigator.of(ctx).pop();
+            },
+            child: const Text('Save'),
+          ),
+        ],
       ),
     );
   }
 
-  Future<void> _test() async {
-    await _save();
-    setState(() => _testing = true);
-    final ok = await context.read<ApiService>().health();
-    setState(() {
-      _testing = false;
-      _lastTestOk = ok;
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
-    final isConfigured = _savedUrl != null && _savedUrl!.isNotEmpty;
-    return Scaffold(
-      appBar: AppBar(title: const Text('⚙️ Settings')),
+    final online = context.watch<ConnectivityService>().isOnline;
+
+    return AppScaffold(
+      title: 'Settings',
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Card(
-            color: isConfigured
-                ? Colors.green.withOpacity(0.08)
-                : Colors.orange.withOpacity(0.1),
+            color: online ? AppColors.rising.withOpacity(0.08) : AppColors.warning.withOpacity(0.08),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
                   Icon(
-                    isConfigured ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
-                    color: isConfigured ? Colors.green.shade700 : Colors.orange.shade800,
+                    online ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+                    color: online ? AppColors.rising : AppColors.warning,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      isConfigured
-                          ? 'Live backend configured — prices refresh from the server.'
-                          : 'No backend configured — AgriGuard is showing a bundled, '
-                              'point-in-time snapshot until you set one below.',
+                      online
+                          ? 'AgriGuard will refresh prices automatically while you\'re online.'
+                          : 'You\'re offline — AgriGuard is showing the last saved data. '
+                              'It will refresh automatically once you\'re back online.',
                     ),
                   ),
                 ],
               ),
             ),
           ),
-          const SizedBox(height: 20),
-          Text('Backend URL', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 24),
+          const SectionHeading(title: 'Alerts'),
           const SizedBox(height: 8),
-          TextField(
-            controller: _urlCtrl,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              hintText: 'https://your-agriguard-backend.example.com',
+          Card(
+            child: SwitchListTile(
+              value: _notifications,
+              onChanged: _toggleNotifications,
+              title: const Text('Price movement alerts'),
+              subtitle: const Text('Get notified when a watched crop moves sharply.'),
             ),
-            keyboardType: TextInputType.url,
-            autocorrect: false,
           ),
+          const SizedBox(height: 10),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Watchlist', style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _watchlist
+                        .map(
+                          (c) => Chip(
+                            label: Text(c),
+                            onDeleted: () => _removeCrop(c),
+                            deleteIcon: const Icon(Icons.close, size: 16),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _addCropCtrl,
+                          decoration: const InputDecoration(hintText: 'Add a crop e.g. Sorghum'),
+                          onSubmitted: (_) => _addCrop(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filled(
+                        onPressed: _addCrop,
+                        icon: const Icon(Icons.add),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          const SectionHeading(title: 'Preferences'),
           const SizedBox(height: 8),
-          Text(
-            'Your phone can\'t reach "localhost" — that always means the '
-            'phone itself. For the real AgriGuard backend, use either your '
-            'dev machine\'s LAN IP (same Wi-Fi only, e.g. http://192.168.1.42:8000 — '
-            'must also be added to network_security_config.xml) or a '
-            'publicly deployed HTTPS URL.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: BackendConfig.presets.entries
-                .map(
-                  (e) => ActionChip(
-                    label: Text(e.key),
-                    onPressed: () => setState(() => _urlCtrl.text = e.value),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Preferred market', style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Used as the default market across Forecast, Markets and Alerts.',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                )
-                .toList(),
-          ),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _save,
-                  child: const Text('Save'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: _testing ? null : _test,
-                  child: Text(_testing ? 'Testing…' : 'Save & Test Connection'),
-                ),
-              ),
-            ],
-          ),
-          if (_lastTestOk != null) ...[
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Icon(
-                  _lastTestOk! ? Icons.check_circle : Icons.error_outline,
-                  color: _lastTestOk! ? Colors.green.shade700 : Colors.red.shade700,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _lastTestOk!
-                        ? 'Backend reachable — /health responded OK.'
-                        : 'Could not reach that backend. Falling back to '
-                            'offline data until it\'s reachable.',
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _marketCtrl,
+                          decoration: const InputDecoration(hintText: 'e.g. Mbarara, Gulu, Lira'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(onPressed: _saveMarket, child: const Text('Save')),
+                    ],
                   ),
-                ),
-              ],
+                  if (_preferredMarket != null) ...[
+                    const SizedBox(height: 8),
+                    Text('Currently: $_preferredMarket', style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ],
+              ),
             ),
-          ],
+          ),
+          const SizedBox(height: 24),
+          const SectionHeading(title: 'Storage'),
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.delete_sweep_outlined),
+              title: const Text('Clear offline cache'),
+              subtitle: const Text('Frees storage; live data will re-download next time you\'re online.'),
+              onTap: _clearCache,
+            ),
+          ),
+          const SizedBox(height: 24),
+          const SectionHeading(title: 'About'),
+          const SizedBox(height: 8),
+          Card(
+            child: GestureDetector(
+              onTap: _handleVersionTap,
+              child: const ListTile(
+                leading: Icon(Icons.eco_outlined),
+                title: Text('AgriGuard'),
+                subtitle: Text('Version 0.1.0'),
+              ),
+            ),
+          ),
         ],
       ),
     );

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/forecast_model.dart';
+import '../theme/app_theme.dart';
 
 /// Compact card showing a single forecast horizon summary or a key metric.
 class ForecastCard extends StatelessWidget {
@@ -16,17 +17,15 @@ class ForecastCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isUp = forecast.pctChange >= 0;
-    final trendColor = isUp ? Colors.green.shade700 : Colors.red.shade700;
-    final trendIcon = isUp ? Icons.trending_up : Icons.trending_down;
+    final trendColor = isUp ? AppColors.rising : AppColors.falling;
+    final trendIcon = isUp ? Icons.trending_up_rounded : Icons.trending_down_rounded;
 
     return Card(
-      elevation: 2,
-      margin: const EdgeInsets.symmetric(vertical: 6),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppRadius.md),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -35,76 +34,93 @@ class ForecastCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       '${forecast.commodity} · ${forecast.market}',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: theme.textTheme.titleMedium,
                     ),
                   ),
-                  Icon(trendIcon, color: trendColor, size: 22),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${isUp ? '+' : ''}${forecast.pctChange.toStringAsFixed(1)}%',
-                    style: TextStyle(
-                      color: trendColor,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: trendColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(trendIcon, color: trendColor, size: 16),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${isUp ? '+' : ''}${forecast.pctChange.toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            color: trendColor,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                'Horizon: ${forecast.horizonDays} days · Model: ${forecast.modelUsed}',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+              if (forecast.substitutedFromMarket != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.warning.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline, size: 16, color: AppColors.warning),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Showing nearest available market data for '
+                          '"${forecast.substitutedFromMarket}" — closest match: ${forecast.market}.',
+                          style: theme.textTheme.bodySmall?.copyWith(color: AppColors.warning),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+              ],
+              const SizedBox(height: 6),
+              Text(
+                '${forecast.horizonDays}-day outlook · ${forecast.confidenceLabel}',
+                style: theme.textTheme.bodySmall,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _metric(
                     context,
-                    'Last predicted',
+                    'Predicted price',
                     '${forecast.lastPredicted.toStringAsFixed(0)} ${forecast.currency}/${forecast.unit}',
                   ),
-                  _metric(
-                    context,
-                    'Trend',
-                    forecast.trend,
-                  ),
-                  _metric(
-                    context,
-                    'Obs used',
-                    '${forecast.observationsUsed}',
-                  ),
+                  _metric(context, 'Trend', _trendLabel(forecast.trend)),
+                  _metric(context, 'Horizon', '${forecast.horizonDays}d'),
                 ],
               ),
               if (forecast.alert != null && forecast.alert!.isNotEmpty) ...[
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
-                    // .withOpacity(), not .withValues() — the latter needs
-                    // Flutter 3.27+ and CI is pinned to 3.24.x.
-                    color: theme.colorScheme.errorContainer.withOpacity(0.4),
-                    borderRadius: BorderRadius.circular(8),
+                    color: trendColor.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: trendColor.withOpacity(0.25)),
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.warning_amber_rounded,
-                        size: 18,
-                        color: theme.colorScheme.error,
-                      ),
+                      Icon(Icons.notifications_active_outlined, size: 18, color: trendColor),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           forecast.alert!,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onErrorContainer,
-                          ),
+                          style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textPrimary),
                         ),
                       ),
                     ],
@@ -118,20 +134,26 @@ class ForecastCard extends StatelessWidget {
     );
   }
 
+  String _trendLabel(String trend) {
+    switch (trend) {
+      case 'rising':
+        return 'Rising';
+      case 'falling':
+        return 'Falling';
+      default:
+        return 'Stable';
+    }
+  }
+
   Widget _metric(BuildContext context, String label, String value) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-        ),
-        const SizedBox(height: 2),
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+        const SizedBox(height: 3),
         Text(
           value,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
         ),
       ],
     );
@@ -155,7 +177,7 @@ class ForecastPointTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       dense: true,
-      title: Text(point.date),
+      title: Text(point.date, style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Text(
         'Range ${point.lowerBound.toStringAsFixed(0)} – ${point.upperBound.toStringAsFixed(0)}',
       ),
@@ -165,10 +187,10 @@ class ForecastPointTile extends StatelessWidget {
         children: [
           Text(
             '${point.predictedPrice.toStringAsFixed(0)} $currency',
-            style: const TextStyle(fontWeight: FontWeight.w600),
+            style: const TextStyle(fontWeight: FontWeight.w700),
           ),
           Text(
-            '${(point.confidence * 100).toStringAsFixed(0)}% conf',
+            '${(point.confidence * 100).toStringAsFixed(0)}% confidence',
             style: Theme.of(context).textTheme.labelSmall,
           ),
         ],

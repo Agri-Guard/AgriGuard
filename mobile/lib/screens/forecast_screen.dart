@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:fl_chart/fl_chart.dart';
-import 'package:intl/intl.dart';
 
 import '../services/api_service.dart';
+import '../services/connectivity_service.dart';
+import '../services/preferences_service.dart';
 import '../models/forecast_model.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_scaffold.dart';
 import '../widgets/forecast_card.dart';
-import '../widgets/data_source_chip.dart';
+import '../widgets/price_history_chart.dart';
 
 class ForecastScreen extends StatefulWidget {
   const ForecastScreen({super.key});
@@ -17,13 +19,14 @@ class ForecastScreen extends StatefulWidget {
 
 class _ForecastScreenState extends State<ForecastScreen> {
   final _commodityCtrl = TextEditingController(text: 'Maize');
-  final _marketCtrl = TextEditingController(text: 'Kampala');
-  int _horizon = 14;
+  final _marketCtrl = TextEditingController(text: '');
+  double _horizon = 14;
   ForecastResponse? _forecast;
   List<HistoryPoint> _history = [];
   bool _loading = false;
   String? _error;
   bool _isLive = false;
+  bool? _wasOnline;
 
   @override
   void dispose() {
@@ -36,8 +39,10 @@ class _ForecastScreenState extends State<ForecastScreen> {
     final commodity = _commodityCtrl.text.trim().isEmpty
         ? 'Maize'
         : _commodityCtrl.text.trim();
-    final market =
-        _marketCtrl.text.trim().isEmpty ? 'Kampala' : _marketCtrl.text.trim();
+    final preferredMarket = await PreferencesService.getPreferredMarket();
+    final market = _marketCtrl.text.trim().isNotEmpty
+        ? _marketCtrl.text.trim()
+        : (preferredMarket ?? 'Kampala');
 
     setState(() {
       _loading = true;
@@ -49,35 +54,35 @@ class _ForecastScreenState extends State<ForecastScreen> {
       final fc = await api.getForecast(
         commodity: commodity,
         market: market,
-        horizon: _horizon,
+        horizon: _horizon.round(),
         source: source,
       );
       List<HistoryPoint> hist = [];
       try {
         hist = await api.getHistory(
           commodity: commodity,
-          market: market,
-          days: 90,
+          market: fc.market, // use the resolved market so history lines up
+          days: 180,
         );
       } catch (_) {
         // history is optional
       }
+      if (!mounted) return;
       setState(() {
         _forecast = fc;
         _history = hist;
         _isLive = source.value;
       });
     } on ApiException catch (e) {
-      // A substituted-market fallback is informational, not a hard error —
-      // show it as a banner instead of blanking the whole screen.
+      if (!mounted) return;
       setState(() => _error = e.toString());
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (!mounted) return;
+      setState(() => _error = 'Could not load a forecast right now.');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
-
 
   @override
   void initState() {
@@ -86,283 +91,193 @@ class _ForecastScreenState extends State<ForecastScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // When connectivity flips from offline -> online, silently refresh so
+    // the screen picks up live data without the person having to tap
+    // refresh themselves.
+    final online = context.watch<ConnectivityService>().isOnline;
+    if (_wasOnline == false && online == true) _load();
+    _wasOnline = online;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('📈 Price Forecast'),
-        actions: [
-          if (_forecast != null || _error != null) DataSourceChip(isLive: _isLive),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _load,
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          TextField(
-            controller: _commodityCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Commodity',
-              border: OutlineInputBorder(),
-              hintText: 'e.g. Maize, Beans, Cassava',
-            ),
-            textInputAction: TextInputAction.next,
-            onSubmitted: (_) => _load(),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _marketCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Market',
-              border: OutlineInputBorder(),
-              hintText: 'e.g. Kampala, Gulu',
-            ),
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) => _load(),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: InputDecorator(
-                  decoration: const InputDecoration(
-                    labelText: 'Horizon (days)',
-                    border: OutlineInputBorder(),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<int>(
-                      value: _horizon,
-                      isExpanded: true,
-                      items: const [
-                        DropdownMenuItem(value: 7, child: Text('7 days')),
-                        DropdownMenuItem(value: 14, child: Text('14 days')),
-                        DropdownMenuItem(value: 28, child: Text('28 days')),
-                      ],
-                      onChanged: (v) {
-                        if (v != null) setState(() => _horizon = v);
-                      },
-                    ),
-                  ),
+    return AppScaffold(
+      title: 'Price Forecast',
+      isLive: (_forecast != null || _error != null) ? _isLive : null,
+      onRefresh: _loading ? null : _load,
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          children: [
+            _buildQueryCard(context),
+            const SizedBox(height: 16),
+            if (_error != null)
+              _ErrorBanner(message: _error!),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            if (_forecast != null && !_loading) ...[
+              ForecastCard(forecast: _forecast!),
+              const SizedBox(height: 16),
+              if (_history.isNotEmpty || _forecast!.forecast.isNotEmpty)
+                PriceHistoryChart(
+                  history: _history,
+                  forecast: _forecast!.forecast,
+                  currency: _forecast!.currency,
+                ),
+              const SizedBox(height: 16),
+              const SectionHeading(title: 'Forecast points'),
+              const SizedBox(height: 10),
+              Card(
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: _forecast!.forecast
+                      .map(
+                        (p) => ForecastPointTile(
+                          point: p,
+                          currency: _forecast!.currency,
+                          unit: _forecast!.unit,
+                        ),
+                      )
+                      .toList(),
                 ),
               ),
-              const SizedBox(width: 12),
-              FilledButton(
-                onPressed: _loading ? null : _load,
-                child: Text(_loading ? 'Loading…' : 'Forecast'),
-              ),
             ],
-          ),
-          const SizedBox(height: 16),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ),
-          if (_loading)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: CircularProgressIndicator(),
-              ),
-            ),
-          if (_forecast != null && !_loading) ...[
-            ForecastCard(forecast: _forecast!),
-            const SizedBox(height: 16),
-            if (_history.isNotEmpty || _forecast!.forecast.isNotEmpty)
-              _buildChart(context),
-            const SizedBox(height: 16),
-            Text(
-              'Forecast points',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-            const SizedBox(height: 8),
-            Card(
-              child: Column(
-                children: _forecast!.forecast
-                    .map(
-                      (p) => ForecastPointTile(
-                        point: p,
-                        currency: _forecast!.currency,
-                        unit: _forecast!.unit,
-                      ),
-                    )
-                    .toList(),
-              ),
-            ),
           ],
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildChart(BuildContext context) {
-    final spots = <FlSpot>[];
-    final labels = <String>[];
-    var i = 0.0;
-
-    final hist = _history.length > 30
-        ? _history.sublist(_history.length - 30)
-        : _history;
-    for (final h in hist) {
-      spots.add(FlSpot(i, h.price));
-      labels.add(h.date);
-      i += 1;
-    }
-    final histEnd = i;
-
-    for (final p in _forecast!.forecast) {
-      spots.add(FlSpot(i, p.predictedPrice));
-      labels.add(p.date);
-      i += 1;
-    }
-
-    if (spots.isEmpty) return const SizedBox.shrink();
-
-    final minY = spots.map((s) => s.y).reduce((a, b) => a < b ? a : b) * 0.95;
-    final maxY = spots.map((s) => s.y).reduce((a, b) => a > b ? a : b) * 1.05;
-
+  Widget _buildQueryCard(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 16, 16, 8),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Price trend (UGX)',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 220,
-              child: LineChart(
-                LineChartData(
-                  minY: minY,
-                  maxY: maxY,
-                  gridData: const FlGridData(show: true, drawVerticalLine: false),
-                  borderData: FlBorderData(show: false),
-                  titlesData: FlTitlesData(
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 44,
-                        getTitlesWidget: (v, _) => Text(
-                          NumberFormat.compact().format(v),
-                          style: const TextStyle(fontSize: 10),
-                        ),
-                      ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _commodityCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Commodity',
+                      hintText: 'e.g. Maize, Beans',
                     ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        // clamp() on a double returns num, not double —
-                        // needs an explicit toDouble() for the double?
-                        // param below.
-                        interval: (spots.length / 4)
-                            .ceilToDouble()
-                            .clamp(1, 10)
-                            .toDouble(),
-                        getTitlesWidget: (v, _) {
-                          final idx = v.toInt();
-                          if (idx < 0 || idx >= labels.length) {
-                            return const SizedBox.shrink();
-                          }
-                          final d = labels[idx];
-                          final short = d.length >= 10 ? d.substring(5, 10) : d;
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Text(short, style: const TextStyle(fontSize: 9)),
-                          );
-                        },
-                      ),
-                    ),
-                    topTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false),
-                    ),
-                    rightTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false),
-                    ),
-                  ),
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: spots.where((s) => s.x < histEnd).toList(),
-                      isCurved: true,
-                      color: Theme.of(context).colorScheme.primary,
-                      barWidth: 2.5,
-                      dotData: const FlDotData(show: false),
-                      belowBarData: BarAreaData(
-                        show: true,
-                        // .withOpacity(), not .withValues() — the latter needs
-                        // Flutter 3.27+ and CI is pinned to 3.24.x.
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withOpacity(0.12),
-                      ),
-                    ),
-                    if (histEnd < spots.length)
-                      LineChartBarData(
-                        spots: spots.where((s) => s.x >= histEnd - 1).toList(),
-                        isCurved: true,
-                        color: Colors.orange.shade700,
-                        barWidth: 2.5,
-                        dashArray: const [6, 4],
-                        dotData: const FlDotData(show: true),
-                      ),
-                  ],
-                  lineTouchData: LineTouchData(
-                    touchTooltipData: LineTouchTooltipData(
-                      getTooltipItems: (touched) {
-                        return touched.map((t) {
-                          final idx = t.x.toInt();
-                          final label = idx >= 0 && idx < labels.length
-                              ? labels[idx]
-                              : '';
-                          return LineTooltipItem(
-                            '$label\n${t.y.toStringAsFixed(0)} UGX',
-                            const TextStyle(color: Colors.white, fontSize: 12),
-                          );
-                        }).toList();
-                      },
-                    ),
+                    textInputAction: TextInputAction.next,
+                    onSubmitted: (_) => _load(),
                   ),
                 ),
-              ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: _marketCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Market',
+                      hintText: 'Optional',
+                    ),
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => _load(),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 4),
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _legendDot(Theme.of(context).colorScheme.primary, 'History'),
-                const SizedBox(width: 16),
-                _legendDot(Colors.orange.shade700, 'Forecast'),
+                Text('Forecast horizon', style: Theme.of(context).textTheme.titleSmall),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '${_horizon.round()} day${_horizon.round() == 1 ? '' : 's'}',
+                    style: const TextStyle(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
               ],
+            ),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+              ),
+              child: Slider(
+                value: _horizon,
+                min: 1,
+                max: 90,
+                divisions: 89,
+                label: '${_horizon.round()}d',
+                onChanged: (v) => setState(() => _horizon = v),
+                onChangeEnd: (_) => _load(),
+              ),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('1 day', style: Theme.of(context).textTheme.labelSmall),
+                Text(
+                  'Confidence narrows past 30 days',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+                Text('90 days', style: Theme.of(context).textTheme.labelSmall),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _loading ? null : _load,
+                icon: const Icon(Icons.trending_up_rounded, size: 18),
+                label: Text(_loading ? 'Forecasting…' : 'Update forecast'),
+              ),
             ),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _legendDot(Color color, String label) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+class _ErrorBanner extends StatelessWidget {
+  final String message;
+  const _ErrorBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.warning.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(AppRadius.sm),
         ),
-        const SizedBox(width: 4),
-        Text(label, style: const TextStyle(fontSize: 11)),
-      ],
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.info_outline, color: AppColors.warning, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(message, style: const TextStyle(color: AppColors.warning)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
