@@ -13,7 +13,7 @@ import 'backend_config.dart';
 /// fallback. Deliberately NOT a field on ApiService itself: several screens
 /// (market_screen.dart) fire multiple ApiService calls concurrently against
 /// one shared instance, and a shared "last call was live" field would be a
-/// race between them — whichever request happened to finish last would
+/// race between them â€” whichever request happened to finish last would
 /// silently overwrite the flag for the others. Each call site creates its
 /// own LiveFlag, so there's nothing to race.
 class LiveFlag {
@@ -25,7 +25,7 @@ class LiveFlag {
 /// snapshot (assets/data/agriguard_offline_data.json) when it isn't
 /// configured, unreachable, or too slow.
 ///
-/// Previous version of this file went fully offline — no HTTP, ever —
+/// Previous version of this file went fully offline â€” no HTTP, ever â€”
 /// because Keith's dev machine wasn't reachable while out on mobile data.
 /// That meant every screen (change market, hit refresh) only ever re-read
 /// the same static snapshot, so nothing ever visibly changed. This restores
@@ -33,7 +33,14 @@ class LiveFlag {
 /// the offline snapshot as a safety net instead of the only source.
 class ApiService {
   static const String _assetPath = 'assets/data/agriguard_offline_data.json';
-  static const Duration _timeout = Duration(seconds: 8);
+  static const Duration _timeout = Duration(seconds: 15);
+
+  /// Render's free tier spins the backend down after inactivity; a cold
+  /// start can take 50+ seconds to answer. This longer timeout is used only
+  /// by [health] / [warmUp] so app launch can wait out a cold start without
+  /// forcing every ordinary data call (which uses [_timeout]) to hang that
+  /// long on ordinary network flakiness.
+  static const Duration _warmUpTimeout = Duration(seconds: 60);
   static Map<String, dynamic>? _offlineCache;
 
   Future<Map<String, dynamic>> _offlineData() async {
@@ -43,7 +50,7 @@ class ApiService {
     return _offlineCache!;
   }
 
-  /// Case/whitespace-insensitive match against a known name list — mirrors
+  /// Case/whitespace-insensitive match against a known name list â€” mirrors
   /// the backend's `.strip().title()` normalisation so a user typing
   /// "maize" or " Maize " still resolves.
   String? _resolve(String input, List<String> options) {
@@ -55,7 +62,7 @@ class ApiService {
   }
 
   /// GET against the configured backend. Returns null (never throws) if no
-  /// backend is configured, it's unreachable, or it times out — callers
+  /// backend is configured, it's unreachable, or it times out â€” callers
   /// treat null as "fall back to offline data". A non-2xx response with a
   /// body IS treated as a real answer from the server (e.g. 404 "no data
   /// for that market") and throws ApiException rather than falling back,
@@ -103,6 +110,22 @@ class ApiService {
       return res.statusCode >= 200 && res.statusCode < 300;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// Fire this once at app launch (see main.dart) to start waking a
+  /// cold Render instance immediately, using [_warmUpTimeout] rather than
+  /// the shorter [_timeout] regular calls use. Fire-and-forget by design â€”
+  /// callers don't need to await it or handle its result; it exists purely
+  /// so the backend is more likely to already be awake by the time the
+  /// user's first real screen makes a data request.
+  Future<void> warmUp() async {
+    final base = await BackendConfig.getBaseUrl();
+    if (base.isEmpty) return;
+    try {
+      await http.get(Uri.parse('$base/health')).timeout(_warmUpTimeout);
+    } catch (_) {
+      // Doesn't matter â€” ordinary calls fall back to offline data anyway.
     }
   }
 
@@ -176,7 +199,7 @@ class ApiService {
     resp = _reshapeHorizon(resp, horizon);
 
     if (fallbackUsedMarket != null) {
-      // Attach a non-fatal note instead of throwing the data away — this is
+      // Attach a non-fatal note instead of throwing the data away â€” this is
       // exactly the "changed market, nothing happened" bug: the bundled
       // snapshot has no Maize data for Mbale, so it used to quietly return
       // Lira instead with no indication anything had changed, AND any
@@ -192,7 +215,7 @@ class ApiService {
   /// 7/14/28 days) to the exact horizon the person actually asked for, by
   /// linearly extrapolating the last two bundled points forward (or
   /// truncating) day by day. This keeps the offline experience consistent
-  /// with the live backend, where `horizon` is honoured exactly (1–90 days),
+  /// with the live backend, where `horizon` is honoured exactly (1â€“90 days),
   /// instead of silently rounding to the nearest pre-baked bucket.
   ForecastResponse _reshapeHorizon(ForecastResponse base, int horizon) {
     if (base.forecast.length == horizon) return base;
@@ -223,7 +246,7 @@ class ApiService {
     while (extended.length < horizon) {
       lastDate = lastDate.add(const Duration(days: 1));
       lastPrice += dailyDelta;
-      // Confidence intervals widen the further out the extrapolation goes —
+      // Confidence intervals widen the further out the extrapolation goes â€”
       // a straight-line projection this far past the model's own horizon
       // genuinely is less certain, and the UI should say so.
       final widen = 1 + (extended.length - points.length) * 0.03;
@@ -264,7 +287,7 @@ class ApiService {
     );
   }
 
-  /// Not a real HTTP status — used to distinguish "found data, but for a
+  /// Not a real HTTP status â€” used to distinguish "found data, but for a
   /// different market than asked" so callers can decide whether to show it
   /// anyway (with a banner) or treat it as a hard failure. Kept for
   /// backwards compatibility; new code should check
@@ -401,8 +424,8 @@ class ApiService {
 
   /// Drought-stress signal per market (backend/app/routers/weather.py ::
   /// GET /weather/analytics/drought-risk). No offline fallback exists for
-  /// this — the bundled snapshot (assets/data/agriguard_offline_data.json)
-  /// predates the weather feature and carries no weather data at all — so
+  /// this â€” the bundled snapshot (assets/data/agriguard_offline_data.json)
+  /// predates the weather feature and carries no weather data at all â€” so
   /// unlike every other ApiService method above, a null/failed live call
   /// here means "genuinely unavailable right now", not "serve the stale
   /// snapshot". Callers should show that honestly rather than inventing
