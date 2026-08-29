@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -12,6 +14,10 @@ import 'theme/app_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Fire-and-forget: starts waking a cold Render instance the moment the
+  // app opens, so it's more likely to already be awake by the time the
+  // first screen makes its real data request. See ApiService.warmUp().
+  unawaited(ApiService().warmUp());
   runApp(const AgriGuardApp());
 }
 
