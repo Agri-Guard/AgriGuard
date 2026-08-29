@@ -50,7 +50,7 @@ jobs:
         run: flutter test || true
 
       - name: Build release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --dart-define=AGRIGUARD_BACKEND_URL=${{ vars.AGRIGUARD_BACKEND_URL }}
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
