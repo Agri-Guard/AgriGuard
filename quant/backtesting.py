@@ -190,8 +190,9 @@ def run_backtest(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Runs the full backtest across every tier and every crop x market pair,
-    reading `features_{tier}.parquet` produced by notebook 02 /
-    `scripts/train_models.py::build_features` from `processed_dir`.
+    reading `features_{tier}.parquet` produced by
+    `scripts/build_quant_features.py` (via `quant.features`) from
+    `processed_dir`.
 
     Returns (backtest_results, residuals_long):
       - backtest_results: one row per (tier, crop_enc, market_enc) with
@@ -210,7 +211,10 @@ def run_backtest(
     for tier, cfg in tiers.items():
         feat_path = processed_dir / f"features_{tier}.parquet"
         if not feat_path.exists():
-            warnings.warn(f"Skipping {tier}: {feat_path} not found (run notebook 02 first)")
+            warnings.warn(
+                f"Skipping {tier}: {feat_path} not found "
+                "(run `python scripts/build_quant_features.py` first)"
+            )
             continue
 
         feat = pd.read_parquet(feat_path)
