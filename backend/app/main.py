@@ -29,7 +29,7 @@ from backend.app.schemas import (
 
 from backend.app.validator import validate_input
 from backend.app.model import predict_price, ModelNotReadyError
-from backend.app.services import wfp_sync, fews_net_sync
+from backend.app.services import data_sources
 
 from backend.app.routers.forecasts import router as forecasts_router
 from backend.app.routers.markets import router as markets_router
@@ -90,43 +90,38 @@ def on_startup() -> None:
     create_tables()
 
     global _scheduler
-    # Independent on/off switches: either feed can be disabled without
-    # affecting the other, so each gets its own enabled-check rather than
-    # nesting FEWS NET inside the WFP condition.
-    if (settings.wfp_sync_enabled or settings.fews_net_sync_enabled) and _scheduler is None:
+    # Generic over backend.app.services.data_sources.SOURCE_REGISTRY instead
+    # of one hand-rolled add_job() block per source (previously WFP and
+    # FEWS NET each got their own copy-pasted block here). Registering a
+    # new ACTIVE source now means adding one entry to data_sources.py, not
+    # editing this function — see that module's docstring for the full
+    # active/catalogued split.
+    active = data_sources.active_sources()
+    enabled = [s for s in active if s.enabled_flag]
+    if enabled and _scheduler is None:
         _scheduler = BackgroundScheduler(daemon=True)
 
-        if settings.wfp_sync_enabled:
+        for source in enabled:
+            job_id = source.name.lower().replace(" ", "_").replace("(", "").replace(")", "")
             _scheduler.add_job(
-                wfp_sync.sync_if_updated,
+                source.sync_module.sync_if_updated,
                 "interval",
-                hours=settings.wfp_sync_interval_hours,
-                id="wfp_price_sync",
+                hours=source.interval_hours_flag,
+                id=job_id,
                 next_run_time=datetime.now(),  # also check once immediately on boot
                 max_instances=1,
                 coalesce=True,
             )
             logger.info(
-                "WFP price sync scheduler started — checking every %.1fh",
-                settings.wfp_sync_interval_hours,
-            )
-
-        if settings.fews_net_sync_enabled:
-            _scheduler.add_job(
-                fews_net_sync.sync_if_updated,
-                "interval",
-                hours=settings.fews_net_sync_interval_hours,
-                id="fews_net_price_sync",
-                next_run_time=datetime.now(),  # also check once immediately on boot
-                max_instances=1,
-                coalesce=True,
-            )
-            logger.info(
-                "FEWS NET price sync scheduler started — checking every %.1fh",
-                settings.fews_net_sync_interval_hours,
+                "%s sync scheduler started — checking every %.1fh",
+                source.name, source.interval_hours_flag,
             )
 
         _scheduler.start()
+
+    skipped = [s for s in active if not s.enabled_flag]
+    for source in skipped:
+        logger.info("%s sync is disabled via settings — not scheduled.", source.name)
 
 
 @app.on_event("shutdown")
