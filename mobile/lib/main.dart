@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'offline/local_cache.dart';
+import 'offline/sync_service.dart';
 import 'screens/forecast_screen.dart';
 import 'screens/market_screen.dart';
 import 'screens/alerts_screen.dart';
@@ -10,6 +12,7 @@ import 'screens/weather_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/api_service.dart';
 import 'services/connectivity_service.dart';
+import 'services/preferences_service.dart';
 import 'theme/app_theme.dart';
 
 void main() {
@@ -18,7 +21,22 @@ void main() {
   // app opens, so it's more likely to already be awake by the time the
   // first screen makes its real data request. See ApiService.warmUp().
   unawaited(ApiService().warmUp());
+  // Fire-and-forget: silently refreshes the person's own watchlist crops
+  // (Settings > Watchlist) into LocalCache while online, so that if they
+  // later lose connectivity, Forecast/Alerts fall back to their own recent
+  // real data (see ApiService.getForecast's cache tier) instead of jumping
+  // straight to the generic bundled snapshot. No-ops quickly if offline —
+  // see SyncService.isOnline.
+  unawaited(_prefetchWatchlist());
   runApp(const AgriGuardApp());
+}
+
+Future<void> _prefetchWatchlist() async {
+  final watchlist = await PreferencesService.getWatchlist();
+  if (watchlist.isEmpty) return;
+  final market = await PreferencesService.getPreferredMarket() ?? 'Kampala';
+  final sync = SyncService(api: ApiService(), cache: LocalCache());
+  await sync.prefetch(watchlist.map((c) => (c, market)).toList());
 }
 
 class AgriGuardApp extends StatelessWidget {

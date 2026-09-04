@@ -8,7 +8,7 @@ Cross-platform client for Ugandan farmers: crop price forecasts, market intellig
 - **Markets** — cross-market summary (best/worst price, national average)
 - **Alerts** — watchlist of commodities with significant predicted moves or server-side alerts
 - **Weather** — drought-risk and heavy-rain/flood warnings per market (live-only, no offline snapshot)
-- **Offline** — bundled snapshot (`assets/data/agriguard_offline_data.json`) + LocalCache/SyncService so Forecast/Markets/Alerts still work with no backend reachable; Weather requires a live connection.
+- **Offline** — Markets/Alerts fall back to the bundled snapshot (`assets/data/agriguard_offline_data.json`) with no backend reachable; Forecast additionally checks LocalCache first for a real forecast SyncService prefetched earlier for the person's own watchlist (fresher, since it's their actual crops, not the generic bundled set), falling back to the bundled snapshot if nothing's cached yet. Weather requires a live connection — no offline data for it at all.
 
 ## Prerequisites
 

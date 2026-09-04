@@ -15,29 +15,31 @@ class SyncService {
     return !result.contains(ConnectivityResult.none);
   }
 
-  /// Prefetch forecasts for a list of (commodity, market) pairs.
+  /// Prefetch forecasts for a list of (commodity, market) pairs and store
+  /// the *full* forecast (via [ForecastResponse.toJson]) — not just a
+  /// summary — so [ApiService.getForecast] can later feed a cache hit
+  /// straight back through [ForecastResponse.fromJson] and render it
+  /// exactly like a live response (chart, forecast-point list, alert
+  /// banner, all of it), rather than a stub with only a few fields.
   Future<int> prefetch(List<(String, String)> pairs, {int horizon = 14}) async {
     if (!await isOnline) return 0;
     var ok = 0;
     for (final (commodity, market) in pairs) {
       try {
+        final source = LiveFlag();
         final forecast = await api.getForecast(
           commodity: commodity,
           market: market,
           horizon: horizon,
+          source: source,
         );
-        await cache.put(
-          'forecast_${commodity}_$market',
-          {
-            'commodity': forecast.commodity,
-            'market': forecast.market,
-            'last_price': forecast.lastPredicted,
-            'trend': forecast.trend,
-            'pct_change': forecast.pctChange,
-            'alert': forecast.alert,
-            'cached_at': DateTime.now().toIso8601String(),
-          },
-        );
+        // Only cache genuinely live data — caching an offline-snapshot
+        // result back into LocalCache would just be copying the bundled
+        // asset into another format for no benefit, and would make a
+        // future cache hit look fresher than it actually is.
+        if (!source.value) continue;
+
+        await cache.put(LocalCache.forecastKey(commodity, market), forecast.toJson());
         ok++;
       } catch (_) {
         // keep going

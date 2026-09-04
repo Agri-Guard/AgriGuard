@@ -37,6 +37,18 @@ class ForecastPoint {
       confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
     );
   }
+
+  /// Inverse of [fromJson] — same snake_case shape the backend sends, so a
+  /// [ForecastResponse] can be cached to disk (see [LocalCache] /
+  /// [SyncService] in offline/) and later fed straight back through
+  /// [ForecastResponse.fromJson] without a separate parser.
+  Map<String, dynamic> toJson() => {
+        'date': date,
+        'predicted_price': predictedPrice,
+        'lower_bound': lowerBound,
+        'upper_bound': upperBound,
+        'confidence': confidence,
+      };
 }
 
 /// Full forecast for one commodity x market combination.
@@ -133,6 +145,26 @@ class ForecastResponse {
       generatedAt: json['generated_at'] as String? ?? '',
     );
   }
+
+  /// Inverse of [fromJson]. Deliberately omits [substitutedFromMarket] —
+  /// that flag is set client-side when *serving* a substitution, not a
+  /// property of the forecast itself, so it shouldn't be baked into a
+  /// cached copy and silently resurface on a later cache hit for a market
+  /// that, by then, may have its own real data.
+  Map<String, dynamic> toJson() => {
+        'commodity': commodity,
+        'market': market,
+        'currency': currency,
+        'unit': unit,
+        'horizon_days': horizonDays,
+        'observations_used': observationsUsed,
+        'forecast': forecast.map((p) => p.toJson()).toList(),
+        'trend': trend,
+        'pct_change': pctChange,
+        'alert': alert,
+        'model_used': modelUsed,
+        'generated_at': generatedAt,
+      };
 
   /// The backend doesn't send a standalone "last predicted price" — the
   /// closest useful value is the final point on the forecast horizon.

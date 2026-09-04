@@ -5,6 +5,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 class LocalCache {
   static const _prefix = 'agriguard_';
 
+  /// Shared between [SyncService.prefetch] (writer) and
+  /// [ApiService.getForecast] (reader) — both sides must agree on this key
+  /// shape or a prefetch is invisible to the app. Lives here rather than on
+  /// either service so neither has to import the other.
+  static String forecastKey(String commodity, String market) =>
+      'forecast_${commodity.trim()}_${market.trim()}';
+
   Future<void> put(String key, Map<String, dynamic> value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('$_prefix$key', jsonEncode(value));
