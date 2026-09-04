@@ -1,0 +1,59 @@
+--- a/mobile/lib/services/api_service.dart	2026-09-04 17:59:31.446686620 +0000
++++ b/mobile/lib/services/api_service.dart	2026-09-04 18:26:58.830990174 +0000
+@@ -254,7 +254,25 @@
+     final chosen = available.reduce(
+       (a, b) => (a - horizon).abs() <= (b - horizon).abs() ? a : b,
+     );
+-    var resp = ForecastResponse.fromJson(horizons['$chosen'] as Map<String, dynamic>);
++    // ForecastResponse.fromJson expects commodity/market/currency/unit at
++    // the top level of the map it's given (mirroring the live backend's
++    // response shape), but scripts/gen_offline_data.py stores those once
++    // per commodity/market pair on `entry` and keeps each per-horizon
++    // object (`entry['horizons'][h]`) limited to just that horizon's own
++    // fields. Passing the bare horizon object straight to fromJson silently
++    // produced a ForecastResponse with an empty commodity/market ("" is a
++    // valid non-null String, so nothing threw) — which is exactly the blank
++    // "· ." header and "closest match: ." notice Keith saw. Merge the
++    // entry-level fields in before parsing so this can't happen regardless
++    // of which of the two shapes the bundle uses.
++    final horizonJson = {
++      ...horizons['$chosen'] as Map<String, dynamic>,
++      'commodity': entry['commodity'],
++      'market': entry['market'],
++      'currency': entry['currency'],
++      'unit': entry['unit'],
++    };
++    var resp = ForecastResponse.fromJson(horizonJson);
+     resp = _reshapeHorizon(resp, horizon);
+ 
+     if (fallbackUsedMarket != null) {
+@@ -330,6 +348,20 @@
+     final last = points.last.predictedPrice;
+     final pctChange = first == 0 ? 0.0 : double.parse((((last - first) / first) * 100).toStringAsFixed(2));
+     final trend = pctChange > 1.5 ? 'rising' : (pctChange < -1.5 ? 'falling' : 'stable');
++    // Regenerate the alert text for the reshaped horizon rather than
++    // carrying over `base.alert` — that string was baked in at bundle-build
++    // time for whichever fixed horizon (7/14/28d) got picked as the nearest
++    // match, so after reshaping to the horizon the person actually chose
++    // (e.g. 43 days), the old text quoted a stale percentage that visibly
++    // disagreed with the trend badge above it.
++    String? alert;
++    if (pctChange.abs() >= 5) {
++      final direction = trend == 'rising' ? 'rise' : 'fall';
++      final emoji = trend == 'rising' ? '\u{1F4C8}' : '\u{1F4C9}';
++      final tip = trend == 'rising' ? 'Consider selling soon.' : 'Good time to buy inputs.';
++      alert = '$emoji Prices are expected to $direction by ~${pctChange.abs().toStringAsFixed(1)}% '
++          'over the forecast period. $tip';
++    }
+     return ForecastResponse(
+       commodity: base.commodity,
+       market: base.market,
+@@ -340,7 +372,7 @@
+       forecast: points,
+       trend: trend,
+       pctChange: pctChange,
+-      alert: base.alert,
++      alert: alert,
+       modelUsed: base.modelUsed,
+       generatedAt: base.generatedAt,
+     );
