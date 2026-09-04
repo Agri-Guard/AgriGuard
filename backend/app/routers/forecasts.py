@@ -51,7 +51,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
-from backend.app.services import wfp_sync, fews_net_sync
+from backend.app.services import wfp_sync, fews_net_sync, quant_bridge, data_sources
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +68,66 @@ DATA_PATH: str = os.environ.get(
     ),
 )
 
-# Minimum number of historical observations required before we attempt a
-# forecast. Below this threshold the model output is too unreliable to show.
+# Minimum number of historical observations we're comfortable running the
+# full Prophet/XGBoost pipeline on. Below this we no longer refuse outright
+# (see ABSOLUTE_MIN_OBSERVATIONS) — we drop to naive_forecast() instead and
+# say so in the response, rather than making the farmer hit a dead end.
 MIN_OBSERVATIONS: int = 10
+
+# Hard floor. Below this there simply isn't enough signal to say anything
+# defensible about direction, so we still refuse — but the floor is much
+# lower than MIN_OBSERVATIONS, and the message explains why in plain terms.
+ABSOLUTE_MIN_OBSERVATIONS: int = 3
 
 # Percentage change threshold above which we emit a price alert.
 ALERT_THRESHOLD_PCT: float = 5.0
+
+# =============================================================================
+# Food-only scope
+# =============================================================================
+# AgriGuard forecasts crop/food prices for farmers — not batteries, charcoal,
+# or exercise books. WFP's Uganda price feed carries a real "category" column
+# and roughly a fifth of its rows are "non-food" items (soap, hoes, firewood,
+# school supplies, ...). Those were previously being loaded, blended, and
+# left available for forecasting right alongside Maize and Beans. This is the
+# allowlist of WFP's own food categories; anything else (chiefly "non-food")
+# is dropped in _load_wfp_csv() before the data ever reaches a model.
+FOOD_CATEGORIES: set[str] = {
+    "cereals and tubers",
+    "pulses and nuts",
+    "oil and fats",
+    "vegetables and fruits",
+    "miscellaneous food",
+    "meat, fish and eggs",
+    "milk and dairy",
+}
+
+# Second line of defense for sources with no category column at all (e.g.
+# FEWS NET's "simple" fields extract). Matched as a case-insensitive
+# substring against the commodity name — catches the non-food items that
+# tend to show up in these feeds (exchange rates, fuel, wage series) even
+# without a category field to filter on.
+NON_FOOD_COMMODITY_KEYWORDS: tuple[str, ...] = (
+    "exchange rate", "fuel", "diesel", "petrol", "wage", "soap", "charcoal",
+    "firewood", "battery", "batteries", "basin", "hoe", "exercise book",
+    "school", "jerry can",
+)
+
+
+def _is_food_commodity(name: str) -> bool:
+    lowered = str(name).lower()
+    return not any(kw in lowered for kw in NON_FOOD_COMMODITY_KEYWORDS)
+
+
+def _friendly_error(status_code: int, technical: str, friendly: str) -> HTTPException:
+    """
+    Log the technical detail server-side (for us) and raise an HTTPException
+    carrying only the friendly message (for the farmer/trader on the other
+    end). Nothing under this router should hand a raw stack trace, column
+    name, or file path back to a USSD/mobile client again.
+    """
+    logger.error(technical)
+    return HTTPException(status_code=status_code, detail=friendly)
 
 
 # =============================================================================
@@ -101,8 +155,10 @@ class ForecastResponse(BaseModel):
     trend: str                 # "rising" | "falling" | "stable"
     pct_change: float          # Predicted % change over the horizon
     alert: Optional[str]       # Human-readable warning if pct_change is large
-    model_used: str            # "prophet" | "prophet+xgb" | "linear"
+    model_used: str            # "prophet" | "prophet+xgb" | "linear" | "naive"
     generated_at: str          # UTC ISO-8601 timestamp
+    data_quality: str = "sufficient"   # "sufficient" | "limited" — see naive_forecast()
+    data_quality_note: Optional[str] = None  # Plain-language caveat when data_quality != "sufficient"
 
 
 class CommodityListResponse(BaseModel):
@@ -156,6 +212,24 @@ class FewsNetSyncStatusResponse(BaseModel):
     synced_at: Optional[str] = None       # When we last pulled a fresh copy (UTC ISO-8601)
 
 
+class DataSourceInfo(BaseModel):
+    """One entry from services/data_sources.py's registry."""
+    name: str
+    url: str
+    status: str            # "active" | "catalogued"
+    scope: str
+    cadence_note: str
+    credibility_note: str
+    note: Optional[str] = None   # catalogued_note, only set for status="catalogued"
+
+
+class SourcesResponse(BaseModel):
+    """Every price-data source AgriGuard auto-syncs from, plus credible
+    sources that have been evaluated and logged but aren't wired up yet."""
+    active: list[DataSourceInfo]
+    catalogued: list[DataSourceInfo]
+
+
 # =============================================================================
 # Data loading and cleaning
 # =============================================================================
@@ -175,13 +249,12 @@ def _load_wfp_csv() -> pd.DataFrame:
     try:
         df = pd.read_csv(DATA_PATH, low_memory=False)
     except FileNotFoundError:
-        logger.error("WFP price dataset not found at %s", DATA_PATH)
-        raise HTTPException(
+        raise _friendly_error(
             status_code=503,
-            detail=(
-                "Price dataset not found. "
-                "Ensure wfp_food_prices_uga.csv is present in data/raw/ "
-                "or set the AGRIGUARD_PRICE_DATA environment variable."
+            technical=f"WFP price dataset not found at {DATA_PATH}",
+            friendly=(
+                "Price data isn't available right now. We're working on it — "
+                "please try again shortly."
             ),
         )
 
@@ -204,17 +277,24 @@ def _load_wfp_csv() -> pd.DataFrame:
             rename_map[col] = "unit"
         elif col in ("pricetype", "price_type") and "price_type" not in rename_map.values():
             rename_map[col] = "price_type"
+        elif col == "category" and "category" not in rename_map.values():
+            rename_map[col] = "category"
 
     df.rename(columns=rename_map, inplace=True)
 
     required = {"date", "commodity", "market", "price"}
     missing = required - set(df.columns)
     if missing:
-        logger.error("Dataset missing columns after normalisation: %s", missing)
-        raise HTTPException(
+        raise _friendly_error(
             status_code=500,
-            detail=f"Dataset is missing expected columns: {sorted(missing)}. "
-                   f"Found columns: {sorted(df.columns.tolist())}",
+            technical=(
+                f"Dataset missing columns after normalisation: {sorted(missing)}. "
+                f"Found columns: {sorted(df.columns.tolist())}"
+            ),
+            friendly=(
+                "We hit a problem reading the latest price data. "
+                "Our team has been notified — please try again later."
+            ),
         )
 
     # Type coercion and cleaning
@@ -240,9 +320,27 @@ def _load_wfp_csv() -> pd.DataFrame:
         if not retail.empty:
             df = retail
 
+    # --- Food-only scope --------------------------------------------------
+    # WFP's own "category" column is the authoritative signal here (see
+    # FOOD_CATEGORIES above) — roughly a fifth of this dataset is "non-food"
+    # (soap, batteries, hoes, firewood, exercise books, ...) and none of it
+    # belongs in a crop-price forecaster. Fall back to the keyword net only
+    # if category is missing entirely (older WFP export variants).
+    before = len(df)
+    if "category" in df.columns:
+        df = df[df["category"].astype(str).str.strip().str.lower().isin(FOOD_CATEGORIES)]
+    else:
+        df = df[df["commodity"].apply(_is_food_commodity)]
+    dropped = before - len(df)
+    if dropped:
+        logger.info(
+            "Filtered %d non-food observations out of WFP data (kept %d food rows).",
+            dropped, len(df),
+        )
+
     df["source"] = "WFP"
     logger.info(
-        "Loaded %d WFP price observations from %s", len(df), os.path.basename(DATA_PATH)
+        "Loaded %d WFP food price observations from %s", len(df), os.path.basename(DATA_PATH)
     )
     return df.reset_index(drop=True)
 
@@ -269,6 +367,19 @@ def _load_fews_net_csv() -> Optional[pd.DataFrame]:
     if missing:
         logger.warning("FEWS NET dataset missing columns %s — skipping blend.", sorted(missing))
         return None
+
+    # FDW's "simple" fields extract carries no category column, so this is
+    # the keyword net (NON_FOOD_COMMODITY_KEYWORDS) rather than the WFP
+    # category allowlist — same food-only scope, different mechanism because
+    # the source gives us less to work with.
+    before = len(df)
+    df = df[df["commodity"].apply(_is_food_commodity)]
+    dropped = before - len(df)
+    if dropped:
+        logger.info(
+            "Filtered %d non-food observations out of FEWS NET data (kept %d food rows).",
+            dropped, len(df),
+        )
 
     df["source"] = "FEWS_NET"
     logger.info("Loaded %d FEWS NET price observations from %s", len(df), fews_path.name)
@@ -364,11 +475,12 @@ def _filter_subset(
         subset = subset[subset["market"] == resolved_market].copy()
         return subset.sort_values("date").reset_index(drop=True), resolved_market
 
-    raise HTTPException(
+    raise _friendly_error(
         status_code=404,
-        detail=(
-            f"No price data found for '{commodity}'. "
-            f"Use GET /forecasts/commodities to see available options."
+        technical=f"No price data found for commodity='{commodity}' market='{market}'.",
+        friendly=(
+            f"We don't have price data for '{commodity}' yet. "
+            f"Check GET /forecasts/commodities for what's currently covered."
         ),
     )
 
@@ -697,6 +809,44 @@ def linear_extrapolation(series: pd.DataFrame, horizon: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def naive_forecast(series: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    """
+    Deliberately dumb fallback for series between ABSOLUTE_MIN_OBSERVATIONS
+    and MIN_OBSERVATIONS: too little history to trust Prophet/XGBoost's
+    seasonality and trend fitting, but not so little that we should refuse
+    outright and leave the farmer with nothing.
+
+    Point forecast = last observed price, held flat (a seasonal-naive model
+    with no more than a handful of points has no basis for claiming a trend).
+    The interval widens linearly over the horizon using the historical
+    std-dev, growing wider the further out the forecast reaches — reflecting
+    honestly that confidence in "flat" erodes with time, rather than
+    presenting a fixed band that looks as confident on day 90 as on day 1.
+
+    This is intentionally simpler than linear_extrapolation() (which still
+    fits a trend line) — with this few points a fitted slope is mostly noise.
+    """
+    prices = series["price"].values
+    last_price = float(prices[-1])
+    std = float(np.std(prices)) if len(prices) > 1 else last_price * 0.1
+
+    today = pd.Timestamp.now().normalize()
+    last_date = max(series["date"].max(), today)
+    rows = []
+    for i in range(1, horizon + 1):
+        growth = 1.0 + (i / horizon) * 0.5  # band widens up to 1.5x by the horizon's end
+        band = std * growth
+        rows.append(
+            {
+                "ds": last_date + timedelta(days=i),
+                "yhat": last_price,
+                "yhat_lower": max(last_price - band, 0.0),
+                "yhat_upper": last_price + band,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 # =============================================================================
 # Route helpers
 # =============================================================================
@@ -711,20 +861,47 @@ def _build_forecast_response(
     """
     Run the forecast pipeline and assemble a ForecastResponse.
     Extracted so both get_forecast() and compare_markets() share the same logic.
+
+    Below MIN_OBSERVATIONS (but at/above ABSOLUTE_MIN_OBSERVATIONS) this
+    drops to naive_forecast() instead of Prophet/XGBoost — see naive_forecast()
+    docstring — and marks the response data_quality="limited" so callers know
+    not to over-trust it, rather than either refusing outright or quietly
+    handing back a Prophet forecast fit on almost nothing.
     """
     currency, unit = _latest_metadata(full_subset)
-    fc, model_used = prophet_forecast(train, horizon)
-    fc = _clamp_to_historical_range(fc, train["price"])
+    sparse = len(train) < MIN_OBSERVATIONS
+
+    if sparse:
+        fc = naive_forecast(train, horizon)
+        model_used = "naive"
+    else:
+        fc, model_used = prophet_forecast(train, horizon)
+        fc = _clamp_to_historical_range(fc, train["price"])
+
+    # Data-driven interval sizing from the quant/ module — see
+    # services/quant_bridge.py. Falls back to the heuristic
+    # _clamp_confidence() below whenever there isn't enough history for a
+    # walk-forward backtest, xgboost isn't installed, or anything about the
+    # bridge fails; forecasts.py never depends on quant/ being available.
+    quant_result = None if sparse else quant_bridge.quant_confidence(train, horizon)
 
     points: list[ForecastPoint] = []
-    for _, row in fc.iterrows():
-        conf = _clamp_confidence(row["yhat"], row["yhat_lower"], row["yhat_upper"])
+    for idx, (_, row) in enumerate(fc.iterrows()):
+        if quant_result is not None:
+            lower, upper = quant_bridge.apply_halfwidth(
+                float(row["yhat"]), quant_result.halfwidth
+            )
+            conf = quant_result.confidence
+        else:
+            lower, upper = float(row["yhat_lower"]), float(row["yhat_upper"])
+            conf = _clamp_confidence(row["yhat"], lower, upper)
+
         points.append(
             ForecastPoint(
                 date=pd.Timestamp(row["ds"]).strftime("%Y-%m-%d"),
                 predicted_price=round(float(row["yhat"]), 2),
-                lower_bound=round(float(row["yhat_lower"]), 2),
-                upper_bound=round(float(row["yhat_upper"]), 2),
+                lower_bound=round(lower, 2),
+                upper_bound=round(upper, 2),
                 confidence=conf,
             )
         )
@@ -736,9 +913,22 @@ def _build_forecast_response(
     pct = _pct_change(last_actual, last_predicted)
     alert = build_alert(trend, commodity, pct)
 
+    data_quality = "limited" if sparse else "sufficient"
+    data_quality_note = (
+        (
+            f"Only {len(train)} price observations are available for {commodity} in "
+            f"{market}, so this forecast holds the last known price flat rather than "
+            f"predicting a trend. Treat it as a rough guide, not a firm prediction."
+        )
+        if sparse
+        else None
+    )
+
     logger.info(
-        "Forecast generated | commodity=%s market=%s horizon=%d model=%s trend=%s pct=%.1f",
-        commodity, market, horizon, model_used, trend, pct,
+        "Forecast generated | commodity=%s market=%s horizon=%d model=%s trend=%s "
+        "pct=%.1f data_quality=%s quant_wired=%s",
+        commodity, market, horizon, model_used, trend, pct, data_quality,
+        quant_result is not None,
     )
 
     return ForecastResponse(
@@ -754,6 +944,8 @@ def _build_forecast_response(
         alert=alert,
         model_used=model_used,
         generated_at=datetime.utcnow().isoformat() + "Z",
+        data_quality=data_quality,
+        data_quality_note=data_quality_note,
     )
 
 
@@ -813,6 +1005,30 @@ def trigger_fews_net_sync(force: bool = Query(default=False, description="Re-fet
     """
     fews_net_sync.sync_if_updated(force=force)
     return FewsNetSyncStatusResponse(**fews_net_sync.last_sync_info())
+
+
+@router.get("/sources", response_model=SourcesResponse)
+def list_sources():
+    """
+    Every price-data source AgriGuard pulls from (auto-syncing today) and
+    every credible source that's been evaluated and logged for future
+    integration but isn't wired up yet. See services/data_sources.py.
+    """
+    def _to_info(s: data_sources.DataSource) -> DataSourceInfo:
+        return DataSourceInfo(
+            name=s.name,
+            url=s.url,
+            status=s.status.value,
+            scope=s.scope,
+            cadence_note=s.cadence_note,
+            credibility_note=s.credibility_note,
+            note=s.catalogued_note or None,
+        )
+
+    return SourcesResponse(
+        active=[_to_info(s) for s in data_sources.active_sources()],
+        catalogued=[_to_info(s) for s in data_sources.catalogued_sources()],
+    )
 
 
 @router.get("/commodities", response_model=CommodityListResponse)
@@ -923,13 +1139,21 @@ def get_forecast(
 
     train = _training_window(subset)
 
-    if len(train) < MIN_OBSERVATIONS:
-        raise HTTPException(
+    # Below ABSOLUTE_MIN_OBSERVATIONS there's genuinely nothing defensible to
+    # say (not even "flat") — that's still a hard refusal. Between that floor
+    # and MIN_OBSERVATIONS, _build_forecast_response() below handles it via
+    # naive_forecast() + data_quality="limited" instead of failing.
+    if len(train) < ABSOLUTE_MIN_OBSERVATIONS:
+        raise _friendly_error(
             status_code=422,
-            detail=(
-                f"Only {len(train)} observations available for '{commodity_title}' "
-                f"in '{resolved_market}'. Minimum required: {MIN_OBSERVATIONS}. "
-                f"Try a different market or a commodity with more price history."
+            technical=(
+                f"Only {len(train)} observations for '{commodity_title}' in "
+                f"'{resolved_market}' — below ABSOLUTE_MIN_OBSERVATIONS={ABSOLUTE_MIN_OBSERVATIONS}."
+            ),
+            friendly=(
+                f"There's too little price history for {commodity_title} in {resolved_market} "
+                f"to forecast yet. Try a different market, or check back once more prices "
+                f"have been recorded."
             ),
         )
 
@@ -986,10 +1210,10 @@ def compare_markets(
             subset, resolved_market = _filter_subset(df, commodity_title, mkt)
             train = _training_window(subset)
 
-            if len(train) < MIN_OBSERVATIONS:
+            if len(train) < ABSOLUTE_MIN_OBSERVATIONS:
                 logger.warning(
-                    "Skipping %s for %s — only %d observations.",
-                    mkt, commodity_title, len(train),
+                    "Skipping %s for %s — only %d observations (below the absolute floor of %d).",
+                    mkt, commodity_title, len(train), ABSOLUTE_MIN_OBSERVATIONS,
                 )
                 skipped.append(mkt)
                 continue
@@ -1010,12 +1234,16 @@ def compare_markets(
             skipped.append(mkt)
 
     if not results:
-        raise HTTPException(
+        raise _friendly_error(
             status_code=404,
-            detail=(
-                f"No forecast data available for '{commodity_title}' "
-                f"in any of the requested markets: {market_list}. "
-                f"Use GET /forecasts/commodities to see what is available."
+            technical=(
+                f"No forecast data for commodity='{commodity_title}' "
+                f"in any of markets={market_list}."
+            ),
+            friendly=(
+                f"We couldn't find enough price data for {commodity_title} in any of "
+                f"the markets you asked about. Check GET /forecasts/commodities for "
+                f"what's currently covered."
             ),
         )
 
