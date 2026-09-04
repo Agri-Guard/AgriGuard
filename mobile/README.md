@@ -50,5 +50,5 @@ lib/
 `android/` and `ios/` currently contain only `.gitkeep`. `build-apk.yml` regenerates the Android scaffolding on every CI run via `flutter create --platforms=android`. To do the same locally:
 
 ```bash
-flutter create . --project-name agriguard_mobile --org ug.agriguard
+flutter create . --project-name agriguard_mobile --org com.agriguard
 ```
