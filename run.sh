@@ -47,11 +47,36 @@ if [ -f "config/.env.example" ] && [ ! -f "config/.env" ]; then
     echo "⚠️  Created config/.env — edit it with your DB/API keys!"
 fi
 
-# Optional full setup
-if [[ "$1" == "--setup" || "$1" == "-s" ]]; then
-    echo "→ Running data & model setup..."
-    [ -f "scripts/download_wfp_data.py" ] && python scripts/download_wfp_data.py
-    [ -f "scripts/train_models.py" ] && python scripts/train_models.py
+# Export config/.env into THIS shell so standalone scripts (train_models.py,
+# download_wfp_data.py) see the same vars the FastAPI app gets via
+# python-dotenv in config.py — no more manual `export AGRIGUARD_PRICE_DATA=...`
+if [ -f "config/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source config/.env
+    set +a
+fi
+
+# Resolve paths with the same defaults config.py/train_models.py use, so
+# the checks below agree with what the app will actually load.
+PRICE_DATA="${AGRIGUARD_PRICE_DATA:-data/raw/wfp_food_prices_uga.csv}"
+MODEL_DIR="${MODEL_DIR:-ml/models}"
+FORCE_SETUP=false
+[[ "$1" == "--setup" || "$1" == "-s" ]] && FORCE_SETUP=true
+
+# Data bootstrap — one-time download (or synthetic fallback) for a fresh
+# checkout / empty data/raw/. Safe to skip once the CSV exists; wfp_sync.py
+# keeps it fresh from then on.
+if [ -f "scripts/download_wfp_data.py" ] && { [ ! -f "$PRICE_DATA" ] || [ "$FORCE_SETUP" = true ]; }; then
+    echo "→ Downloading WFP price data..."
+    python scripts/download_wfp_data.py
+fi
+
+# Model bootstrap — train once if the pickles are missing, so `./run.sh`
+# alone (no flags, no prior manual steps) gets you a working forecast API.
+if [ -f "scripts/train_models.py" ] && { [ ! -f "$MODEL_DIR/price_forecast_model.pkl" ] || [ ! -f "$MODEL_DIR/encoders.pkl" ] || [ "$FORCE_SETUP" = true ]; }; then
+    echo "→ Training models (missing or --setup forced)..."
+    python scripts/train_models.py --data "$PRICE_DATA" --out "$MODEL_DIR"
 fi
 
 echo "✅ Ready!"

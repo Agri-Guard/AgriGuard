@@ -438,6 +438,28 @@ def build_alert(
     )
 
 
+def _clamp_to_historical_range(fc: pd.DataFrame, hist_prices: pd.Series) -> pd.DataFrame:
+    """
+    Defense-in-depth: whatever prophet_forecast()/xgb_residual_correction()
+    produced, never let a forecast point escape the real-world price
+    universe for this commodity/market. This is deliberately a generous
+    leash (historical range + a same-size buffer on each side), not a tight
+    one — it's meant to catch genuine model blow-ups (e.g. under-identified
+    seasonality on sparse data), not to suppress legitimate trend movement.
+    """
+    hist_min = float(hist_prices.min())
+    hist_max = float(hist_prices.max())
+    hist_range = hist_max - hist_min
+    buffer = hist_range if hist_range > 0 else max(hist_max * 0.5, 1.0)
+    floor = max(0.0, hist_min - buffer)
+    ceiling = hist_max + buffer
+
+    clamped = fc.copy()
+    for col in ("yhat", "yhat_lower", "yhat_upper"):
+        clamped[col] = clamped[col].clip(lower=floor, upper=ceiling)
+    return clamped
+
+
 def _clamp_confidence(yhat: float, lower: float, upper: float) -> float:
     """
     Derive a confidence score in [0.0, 1.0] from the prediction interval width.
@@ -478,12 +500,31 @@ def prophet_forecast(series: pd.DataFrame, horizon: int) -> tuple[pd.DataFrame, 
 
         train = series.rename(columns={"date": "ds", "price": "y"})
 
+        n_obs = len(train)
+        span_days = (train["ds"].max() - train["ds"].min()).days
+
+        # Yearly seasonality needs at least ~2 full cycles to be reliably
+        # identified — Prophet itself warns "under-identified" below 730
+        # days of history. With WFP/FEWS NET's monthly cadence, a series
+        # can clear MIN_OBSERVATIONS (10) while still being far short of
+        # that: 24 monthly points spanning <2 years previously produced a
+        # forecast that swung to -UGX 43,700 internally before the yhat>=0
+        # clip turned it into a smooth-looking but fabricated 0→30k→0 hump,
+        # against a real historical range of UGX 1,900-5,000. Only turn
+        # yearly seasonality on once there's enough span AND enough points
+        # to actually constrain it, and even then use a low Fourier order
+        # (4 terms, not the default 10) plus a tighter seasonality prior —
+        # sparse monthly data can't support 10 terms' worth of free
+        # parameters without overfitting to noise.
+        enable_yearly = span_days >= 730 and n_obs >= 24
+        sparse = n_obs < 60
+
         m = Prophet(
-            yearly_seasonality=True,
+            yearly_seasonality=4 if enable_yearly else False,
             weekly_seasonality=False,
             daily_seasonality=False,
-            changepoint_prior_scale=0.15,   # Controls trend flexibility
-            seasonality_prior_scale=10.0,   # Controls seasonality amplitude
+            changepoint_prior_scale=0.05 if sparse else 0.15,  # trend flexibility
+            seasonality_prior_scale=3.0 if sparse else 10.0,   # seasonality amplitude
             interval_width=0.90,            # 90 % prediction interval
         )
         m.fit(train)
@@ -514,6 +555,9 @@ def prophet_forecast(series: pd.DataFrame, horizon: int) -> tuple[pd.DataFrame, 
         )
         fc["yhat"]       = fc["yhat"].clip(lower=0)
         fc["yhat_lower"] = fc["yhat_lower"].clip(lower=0)
+        # Full historical-range clamp (covers yhat_upper too, and the
+        # xgb-corrected output below) happens centrally in
+        # _build_forecast_response() via _clamp_to_historical_range().
 
         # Attempt XGBoost residual correction on top of Prophet
         fc, label = xgb_residual_correction(series, fc)
@@ -670,6 +714,7 @@ def _build_forecast_response(
     """
     currency, unit = _latest_metadata(full_subset)
     fc, model_used = prophet_forecast(train, horizon)
+    fc = _clamp_to_historical_range(fc, train["price"])
 
     points: list[ForecastPoint] = []
     for _, row in fc.iterrows():
