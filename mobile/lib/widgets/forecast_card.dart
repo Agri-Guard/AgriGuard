@@ -5,11 +5,13 @@ import '../theme/app_theme.dart';
 /// Compact card showing a single forecast horizon summary or a key metric.
 class ForecastCard extends StatelessWidget {
   final ForecastResponse forecast;
+  final double? currentPrice;
   final VoidCallback? onTap;
 
   const ForecastCard({
     super.key,
     required this.forecast,
+    this.currentPrice,
     this.onTap,
   });
 
@@ -94,13 +96,18 @@ class ForecastCard extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
+                  if (currentPrice != null)
+                    _metric(
+                      context,
+                      'Current price',
+                      '${currentPrice!.toStringAsFixed(0)} ${forecast.currency}/${forecast.unit}',
+                    ),
                   _metric(
                     context,
-                    'Predicted price',
+                    'Predicted (${forecast.horizonDays}d)',
                     '${forecast.lastPredicted.toStringAsFixed(0)} ${forecast.currency}/${forecast.unit}',
                   ),
                   _metric(context, 'Trend', _trendLabel(forecast.trend)),
-                  _metric(context, 'Horizon', '${forecast.horizonDays}d'),
                 ],
               ),
               if (forecast.alert != null && forecast.alert!.isNotEmpty) ...[

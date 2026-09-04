@@ -18,31 +18,43 @@ class ForecastScreen extends StatefulWidget {
 }
 
 class _ForecastScreenState extends State<ForecastScreen> {
-  final _commodityCtrl = TextEditingController(text: 'Maize');
-  final _marketCtrl = TextEditingController(text: '');
+  String _commodity = 'Maize';
+  String? _market; // null = use preferred/default market
+  List<String> _commodities = [];
+  List<String> _markets = [];
   double _horizon = 14;
   ForecastResponse? _forecast;
   List<HistoryPoint> _history = [];
   bool _loading = false;
+  bool _catalogLoading = true;
   String? _error;
   bool _isLive = false;
   bool? _wasOnline;
 
-  @override
-  void dispose() {
-    _commodityCtrl.dispose();
-    _marketCtrl.dispose();
-    super.dispose();
+  double? get _currentPrice => _history.isNotEmpty ? _history.last.price : null;
+
+  Future<void> _loadCatalog() async {
+    try {
+      final api = context.read<ApiService>();
+      final catalog = await api.listCommodities();
+      if (!mounted) return;
+      setState(() {
+        _commodities = catalog.commodities;
+        _markets = catalog.markets;
+        if (_commodities.isNotEmpty && !_commodities.contains(_commodity)) {
+          _commodity = _commodities.first;
+        }
+        _catalogLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _catalogLoading = false);
+    }
   }
 
   Future<void> _load() async {
-    final commodity = _commodityCtrl.text.trim().isEmpty
-        ? 'Maize'
-        : _commodityCtrl.text.trim();
+    final commodity = _commodity;
     final preferredMarket = await PreferencesService.getPreferredMarket();
-    final market = _marketCtrl.text.trim().isNotEmpty
-        ? _marketCtrl.text.trim()
-        : (preferredMarket ?? 'Kampala');
+    final market = _market ?? preferredMarket ?? 'Kampala';
 
     setState(() {
       _loading = true;
@@ -87,6 +99,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
   @override
   void initState() {
     super.initState();
+    _loadCatalog();
     _load();
   }
 
@@ -122,7 +135,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
                 child: Center(child: CircularProgressIndicator()),
               ),
             if (_forecast != null && !_loading) ...[
-              ForecastCard(forecast: _forecast!),
+              ForecastCard(forecast: _forecast!, currentPrice: _currentPrice),
               const SizedBox(height: 16),
               if (_history.isNotEmpty || _forecast!.forecast.isNotEmpty)
                 PriceHistoryChart(
@@ -164,27 +177,48 @@ class _ForecastScreenState extends State<ForecastScreen> {
             Row(
               children: [
                 Expanded(
-                  child: TextField(
-                    controller: _commodityCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Commodity',
-                      hintText: 'e.g. Maize, Beans',
-                    ),
-                    textInputAction: TextInputAction.next,
-                    onSubmitted: (_) => _load(),
-                  ),
+                  child: _catalogLoading
+                      ? const SizedBox(
+                          height: 56,
+                          child: Center(
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        )
+                      : DropdownButtonFormField<String>(
+                          value: _commodities.contains(_commodity) ? _commodity : null,
+                          decoration: const InputDecoration(labelText: 'Crop'),
+                          isExpanded: true,
+                          items: _commodities
+                              .map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis)))
+                              .toList(),
+                          onChanged: (v) {
+                            if (v == null) return;
+                            setState(() => _commodity = v);
+                            _load();
+                          },
+                        ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: TextField(
-                    controller: _marketCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Market',
-                      hintText: 'Optional',
-                    ),
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _load(),
-                  ),
+                  child: _catalogLoading
+                      ? const SizedBox(height: 56)
+                      : DropdownButtonFormField<String?>(
+                          value: _markets.contains(_market) ? _market : null,
+                          decoration: const InputDecoration(labelText: 'Market', hintText: 'Default'),
+                          isExpanded: true,
+                          items: [
+                            const DropdownMenuItem<String?>(value: null, child: Text('Default')),
+                            ..._markets.map((m) => DropdownMenuItem<String?>(value: m, child: Text(m, overflow: TextOverflow.ellipsis))),
+                          ],
+                          onChanged: (v) {
+                            setState(() => _market = v);
+                            _load();
+                          },
+                        ),
                 ),
               ],
             ),

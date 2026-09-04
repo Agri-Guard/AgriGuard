@@ -29,6 +29,7 @@ flutter:
   assets:
     - assets/icon/
     - assets/data/agriguard_offline_data.json
+    - assets/data/agriguard_weather_data.json
 
 # Run `dart run flutter_launcher_icons` after `flutter pub get` to generate
 # every mipmap/AppIcon size for Android + iOS from the source images below.

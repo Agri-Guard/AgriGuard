@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/forecast_model.dart';
+import '../models/weather_model.dart';
 import '../services/api_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/preferences_service.dart';
@@ -43,13 +44,53 @@ class _AlertItem {
   });
 }
 
+class _WeatherAlertItem {
+  final String market;
+  final String riskLevel;
+  final String advice;
+  _WeatherAlertItem({
+    required this.market,
+    required this.riskLevel,
+    required this.advice,
+  });
+}
+
 class _AlertsScreenState extends State<AlertsScreen> {
   final _alerts = <_AlertItem>[];
+  final _weatherAlerts = <_WeatherAlertItem>[];
   bool _loading = false;
   bool _isLive = false;
   bool _everLoaded = false;
   String? _notice;
   bool? _wasOnline;
+
+  Future<void> _loadWeatherAlerts() async {
+    _weatherAlerts.clear();
+    final api = context.read<ApiService>();
+    try {
+      final markets = await api.weatherMarkets();
+      final preferred = await PreferencesService.getPreferredMarket();
+      // Only check the person's own market plus any others if none is set —
+      // this is meant as a quick heads-up, not a full regional scan (that's
+      // what the Weather tab's live drought/rain section is for).
+      final toCheck = (preferred != null && markets.contains(preferred))
+          ? [preferred]
+          : markets;
+      for (final m in toCheck) {
+        final snap = await api.weatherSnapshot(m);
+        if (snap != null && snap.riskLevel.toLowerCase() != 'normal') {
+          _weatherAlerts.add(_WeatherAlertItem(
+            market: snap.market,
+            riskLevel: snap.riskLevel,
+            advice: snap.advice,
+          ));
+        }
+      }
+    } catch (_) {
+      // Weather alerts are a bonus on this screen — a failure here
+      // shouldn't block the price alerts below.
+    }
+  }
 
   Future<void> _refresh() async {
     setState(() {
@@ -59,6 +100,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
     });
     final api = context.read<ApiService>();
     var sawLive = false;
+
+    await _loadWeatherAlerts();
 
     try {
       final watchlist = await PreferencesService.getWatchlist();
@@ -173,7 +216,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _refresh,
-              child: _alerts.isEmpty
+              child: (_alerts.isEmpty && _weatherAlerts.isEmpty)
                   ? ListView(
                       padding: const EdgeInsets.all(24),
                       children: [
@@ -184,57 +227,82 @@ class _AlertsScreenState extends State<AlertsScreen> {
                         Center(
                           child: Text(
                             _notice ??
-                                'No significant price alerts right now.\nPull down to refresh.',
+                                'No significant price or weather alerts right now.\nPull down to refresh.',
                             textAlign: TextAlign.center,
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                         ),
                       ],
                     )
-                  : ListView.separated(
+                  : ListView(
                       padding: const EdgeInsets.all(16),
-                      itemCount: _alerts.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, i) {
-                        final a = _alerts[i];
-                        final color = a.rising ? AppColors.rising : AppColors.falling;
-                        return Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(14),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: color.withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(10),
+                      children: [
+                        if (_weatherAlerts.isNotEmpty) ...[
+                          Text('Weather', style: Theme.of(context).textTheme.titleMedium),
+                          const SizedBox(height: 10),
+                          ..._weatherAlerts.map((w) => Card(
+                                margin: const EdgeInsets.only(bottom: 10),
+                                child: ListTile(
+                                  leading: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.warning.withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: const Icon(Icons.cloud_outlined, color: AppColors.warning, size: 20),
                                   ),
-                                  child: Icon(
-                                    a.rising ? Icons.trending_up_rounded : Icons.trending_down_rounded,
-                                    color: color,
-                                    size: 20,
-                                  ),
+                                  title: Text('${w.riskLevel} · ${w.market}'),
+                                  subtitle: Text(w.advice),
+                                  isThreeLine: true,
                                 ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        '${a.commodity} · ${a.market}',
-                                        style: Theme.of(context).textTheme.titleMedium,
+                              )),
+                          const SizedBox(height: 16),
+                        ],
+                        if (_alerts.isNotEmpty) ...[
+                          Text('Prices', style: Theme.of(context).textTheme.titleMedium),
+                          const SizedBox(height: 10),
+                          ..._alerts.map((a) {
+                            final color = a.rising ? AppColors.rising : AppColors.falling;
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              child: Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: color.withOpacity(0.12),
+                                        borderRadius: BorderRadius.circular(10),
                                       ),
-                                      const SizedBox(height: 4),
-                                      Text(a.message, style: Theme.of(context).textTheme.bodyMedium),
-                                    ],
-                                  ),
+                                      child: Icon(
+                                        a.rising ? Icons.trending_up_rounded : Icons.trending_down_rounded,
+                                        color: color,
+                                        size: 20,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '${a.commodity} · ${a.market}',
+                                            style: Theme.of(context).textTheme.titleMedium,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(a.message, style: Theme.of(context).textTheme.bodyMedium),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
+                              ),
+                            );
+                          }),
+                        ],
+                      ],
                     ),
             ),
     );

@@ -34,6 +34,7 @@ class LiveFlag {
 /// the offline snapshot as a safety net instead of the only source.
 class ApiService {
   static const String _assetPath = 'assets/data/agriguard_offline_data.json';
+  static const String _weatherAssetPath = 'assets/data/agriguard_weather_data.json';
   static const Duration _timeout = Duration(seconds: 15);
 
   /// Render's free tier spins the backend down after inactivity; a cold
@@ -43,6 +44,7 @@ class ApiService {
   /// long on ordinary network flakiness.
   static const Duration _warmUpTimeout = Duration(seconds: 60);
   static Map<String, dynamic>? _offlineCache;
+  static Map<String, dynamic>? _weatherOfflineCache;
   final LocalCache _localCache = LocalCache();
 
   Future<Map<String, dynamic>> _offlineData() async {
@@ -50,6 +52,40 @@ class ApiService {
     final raw = await rootBundle.loadString(_assetPath);
     _offlineCache = jsonDecode(raw) as Map<String, dynamic>;
     return _offlineCache!;
+  }
+
+  Future<Map<String, dynamic>> _weatherOfflineData() async {
+    if (_weatherOfflineCache != null) return _weatherOfflineCache!;
+    final raw = await rootBundle.loadString(_weatherAssetPath);
+    _weatherOfflineCache = jsonDecode(raw) as Map<String, dynamic>;
+    return _weatherOfflineCache!;
+  }
+
+  /// Every market the bundled weather snapshot covers (see
+  /// scripts/gen_offline_data.py) — a small subset (8 markets) of the full
+  /// price-data market list, matching what Open-Meteo is actually wired up
+  /// for. Used to populate the Weather screen's market picker.
+  Future<List<String>> weatherMarkets() async {
+    final d = await _weatherOfflineData();
+    final markets = (d['markets'] as Map<String, dynamic>?) ?? {};
+    return markets.keys.toList()..sort();
+  }
+
+  /// Current conditions, short forecast, and a plain-language farmer
+  /// advisory for one market. Always reads from the bundled snapshot —
+  /// there's no live equivalent of this exact shape on the backend (the
+  /// backend instead exposes /weather/{market_id}/forecast plus separate
+  /// drought-risk / heavy-rain analytics, both of which the Weather screen
+  /// also shows underneath this for anyone with a live connection).
+  Future<WeatherSnapshot?> weatherSnapshot(String market) async {
+    final d = await _weatherOfflineData();
+    final markets = (d['markets'] as Map<String, dynamic>?) ?? {};
+    final resolved = markets.keys.firstWhere(
+      (k) => k.toLowerCase() == market.trim().toLowerCase(),
+      orElse: () => markets.isNotEmpty ? markets.keys.first : '',
+    );
+    if (resolved.isEmpty) return null;
+    return WeatherSnapshot.fromJson(markets[resolved] as Map<String, dynamic>);
   }
 
   /// Case/whitespace-insensitive match against a known name list — mirrors

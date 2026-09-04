@@ -14,8 +14,9 @@ class MarketScreen extends StatefulWidget {
 }
 
 class _MarketScreenState extends State<MarketScreen> {
-  final _commodityCtrl = TextEditingController(text: 'Maize');
   String _commodity = 'Maize';
+  List<String> _commodities = [];
+  bool _catalogLoading = true;
   CommodityMarketSummary? _summary;
   TopMoversResponse? _movers;
   List<ArbitrageOpportunity>? _arbitrage;
@@ -79,9 +80,27 @@ class _MarketScreenState extends State<MarketScreen> {
     }
   }
 
+  Future<void> _loadCatalog() async {
+    try {
+      final api = context.read<ApiService>();
+      final catalog = await api.listCommodities();
+      if (!mounted) return;
+      setState(() {
+        _commodities = catalog.commodities;
+        if (_commodities.isNotEmpty && !_commodities.contains(_commodity)) {
+          _commodity = _commodities.first;
+        }
+        _catalogLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _catalogLoading = false);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _loadCatalog();
     _load();
   }
 
@@ -95,7 +114,6 @@ class _MarketScreenState extends State<MarketScreen> {
 
   @override
   void dispose() {
-    _commodityCtrl.dispose();
     super.dispose();
   }
 
@@ -115,15 +133,30 @@ class _MarketScreenState extends State<MarketScreen> {
                 child: Row(
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: _commodityCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Commodity',
-                          hintText: 'e.g. Maize, Beans',
-                        ),
-                        onChanged: (v) => _commodity = v.trim().isEmpty ? 'Maize' : v.trim(),
-                        onSubmitted: (_) => _load(),
-                      ),
+                      child: _catalogLoading
+                          ? const SizedBox(
+                              height: 56,
+                              child: Center(
+                                child: SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              ),
+                            )
+                          : DropdownButtonFormField<String>(
+                              value: _commodities.contains(_commodity) ? _commodity : null,
+                              decoration: const InputDecoration(labelText: 'Crop'),
+                              isExpanded: true,
+                              items: _commodities
+                                  .map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis)))
+                                  .toList(),
+                              onChanged: (v) {
+                                if (v == null) return;
+                                setState(() => _commodity = v);
+                                _load();
+                              },
+                            ),
                     ),
                     const SizedBox(width: 10),
                     FilledButton(
