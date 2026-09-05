@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 # regardless of the working directory Streamlit was launched from.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from style import inject_style
+from errors import humanize_response_error, humanize_exception
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -74,11 +75,9 @@ def api(method: str, path: str, base: str, **kwargs):
         r = requests.request(method, url, timeout=60, **kwargs)
         if r.status_code in (200, 201):
             return r.json(), None
-        return None, f"HTTP {r.status_code}: {r.text[:200]}"
-    except requests.exceptions.ConnectionError:
-        return None, "Cannot reach backend — is it running?"
+        return None, humanize_response_error(r)
     except Exception as exc:
-        return None, str(exc)
+        return None, humanize_exception(exc)
 
 
 def trend_html(t: str) -> str:

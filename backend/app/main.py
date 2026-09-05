@@ -148,11 +148,17 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    # Log the real exception server-side (stack trace, message, everything)
+    # for us to debug — but never hand str(exc) straight to the client. This
+    # used to leak Python tracebacks / file paths / column names to whatever
+    # was calling the API (dashboard, USSD gateway, mobile app), none of
+    # which a farmer on the other end can do anything with.
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
-            "error": "Internal server error",
-            "detail": str(exc),
+            "error": "Something went wrong",
+            "detail": "We hit an unexpected problem handling that request. Please try again in a moment.",
             "timestamp": datetime.utcnow().isoformat(),
         },
     )
@@ -225,9 +231,31 @@ def predict_price_endpoint(payload: PricePredictionRequest):
             month=target_date.month,
         )
     except ModelNotReadyError as e:
-        return JSONResponse(status_code=503, content={"error": "Model not ready", "detail": str(e)})
+        # e's own message is developer-facing (file paths, "Run scripts/...
+        # first") — log it for us, tell the caller something they can act on.
+        logger.error("Prediction model not ready: %s", e)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Prediction service unavailable",
+                "detail": "Price predictions aren't available right now. Please try again shortly.",
+            },
+        )
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"error": "Invalid input", "detail": str(e)})
+        # e's own message dumps the full list of known markets/commodities
+        # from the encoder — useful in logs, not something to hand a
+        # USSD/mobile user as-is.
+        logger.info("Prediction rejected — unrecognised input: %s", e)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Invalid input",
+                "detail": (
+                    f"'{payload.crop}' or '{payload.region}' isn't recognised. "
+                    "Use GET /forecasts/commodities to see supported crops and markets."
+                ),
+            },
+        )
 
     # Step 4: adapt model.py's output shape into the PricePredictionResponse the API promises
     predicted = result["predicted_price_ugx"]

@@ -14,6 +14,7 @@ import streamlit as st
 # regardless of the working directory Streamlit was launched from.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from style import inject_style
+from errors import humanize_response_error, humanize_exception
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
 
@@ -32,9 +33,11 @@ st.caption("ML-powered price predictions up to 90 days ahead")
 def api_get(path: str, params: dict = None, timeout: int = 60):
     try:
         r = requests.get(f"{BACKEND_URL}{path}", params=params, timeout=timeout)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.ConnectionError:
+        if r.status_code in (200, 201):
+            return r.json()
+        # Show the backend's own friendly `detail` message (see
+        # frontend/errors.py) instead of requests' technical HTTP summary.
+        st.error(humanize_response_error(r))
         return None
     except requests.exceptions.Timeout:
         st.error(
@@ -44,7 +47,7 @@ def api_get(path: str, params: dict = None, timeout: int = 60):
         )
         return None
     except Exception as e:
-        st.error(f"API error: {e}")
+        st.error(humanize_exception(e))
         return None
 
 
