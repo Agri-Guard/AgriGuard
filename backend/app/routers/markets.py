@@ -58,6 +58,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.app.services import fews_net_sync
+from backend.app.services.food_scope import filter_food_only
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +286,12 @@ def load_price_data() -> pd.DataFrame:
         if not retail.empty:
             df = retail
 
+    # Food-only scope — see services/food_scope.py. Without this,
+    # non-food WFP items (soap, batteries, firewood, ...) still show up in
+    # this router's commodity counts, movers, and national-summary even
+    # after routers/forecasts.py stopped forecasting them.
+    df = filter_food_only(df, source_label="markets: WFP")
+
     df["source"] = "WFP"
     df = df.reset_index(drop=True)
 
@@ -299,6 +306,10 @@ def load_price_data() -> pd.DataFrame:
             fews_df = pd.read_csv(fews_path, low_memory=False, parse_dates=["date"])
             if "region" not in fews_df.columns:
                 fews_df["region"] = None
+            # FEWS NET's extract carries no category column, so this goes
+            # through food_scope's keyword-net fallback rather than the WFP
+            # category allowlist — same food-only scope, different mechanism.
+            fews_df = filter_food_only(fews_df, source_label="markets: FEWS NET")
             fews_df["source"] = "FEWS_NET"
             required_fews = {"date", "commodity", "market", "price"}
             if required_fews.issubset(fews_df.columns) and not fews_df.empty:

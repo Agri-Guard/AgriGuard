@@ -18,6 +18,7 @@ These metrics are what you'll cite in your EPFL project write-up.
 
 import argparse
 import json
+import sys
 import warnings
 from pathlib import Path
 
@@ -28,6 +29,12 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBRegressor
+
+# Allow `python scripts/train_models.py` (not just `python -m
+# scripts.train_models`) to find backend.app.services.food_scope below —
+# same bootstrap scripts/build_quant_features.py already uses.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backend.app.services.food_scope import filter_food_only  # noqa: E402
 
 warnings.filterwarnings("ignore")
 
@@ -85,6 +92,16 @@ def load_and_clean(data_path: Path) -> pd.DataFrame:
     # matching the original per-group "if std > 0 else group" behavior.
     keep = grp_std.isna() | (grp_std == 0) | ((df["price"] - grp_mean).abs() <= 5 * grp_std)
     df = df[keep].reset_index(drop=True)
+
+    # Food-only scope (see backend/app/services/food_scope.py). Without
+    # this, the trained model's own label encoder learns non-food WFP items
+    # (Basin, Batteries, Soap, ...) as valid commodities — which no amount
+    # of filtering in the API layer alone can undo once they're baked into
+    # encoders.pkl. This is the one place that actually has to happen for
+    # /api/v1/predict to stop being able to forecast a wash basin's price.
+    before = len(df)
+    df = filter_food_only(df, source_label="scripts/train_models.py")
+    print(f"   Food-only : dropped {before - len(df):,} non-food rows")
 
     print(f"   Clean rows: {len(df):,}")
     print(f"   Crops     : {df['commodity'].nunique()}")

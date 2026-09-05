@@ -14,6 +14,8 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from backend.app.services.food_scope import filter_food_only
+
 log = logging.getLogger(__name__)
 
 ROOT      = Path(__file__).resolve().parents[2]
@@ -75,6 +77,14 @@ def _get_price_df() -> pd.DataFrame:
         )
     df = pd.read_csv(DATA_FILE, parse_dates=["date"])
     df.columns = [c.lower().strip() for c in df.columns]
+    # Food-only scope — see backend/app/services/food_scope.py. This is the
+    # fallback path used by list_commodities()/list_markets() when no
+    # trained encoders.pkl exists yet; the real fix for a *trained* model is
+    # scripts/train_models.py's own food filter (its encoder never learns
+    # non-food classes in the first place), but this fallback would
+    # otherwise offer Basin/Batteries/etc. as "known commodities" to
+    # validate_input() even before a model has ever been trained.
+    df = filter_food_only(df, source_label="model.py fallback")
     _price_df = df
     return _price_df
 

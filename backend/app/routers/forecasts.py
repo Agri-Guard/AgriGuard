@@ -86,37 +86,17 @@ ALERT_THRESHOLD_PCT: float = 5.0
 # Food-only scope
 # =============================================================================
 # AgriGuard forecasts crop/food prices for farmers — not batteries, charcoal,
-# or exercise books. WFP's Uganda price feed carries a real "category" column
-# and roughly a fifth of its rows are "non-food" items (soap, hoes, firewood,
-# school supplies, ...). Those were previously being loaded, blended, and
-# left available for forecasting right alongside Maize and Beans. This is the
-# allowlist of WFP's own food categories; anything else (chiefly "non-food")
-# is dropped in _load_wfp_csv() before the data ever reaches a model.
-FOOD_CATEGORIES: set[str] = {
-    "cereals and tubers",
-    "pulses and nuts",
-    "oil and fats",
-    "vegetables and fruits",
-    "miscellaneous food",
-    "meat, fish and eggs",
-    "milk and dairy",
-}
-
-# Second line of defense for sources with no category column at all (e.g.
-# FEWS NET's "simple" fields extract). Matched as a case-insensitive
-# substring against the commodity name — catches the non-food items that
-# tend to show up in these feeds (exchange rates, fuel, wage series) even
-# without a category field to filter on.
-NON_FOOD_COMMODITY_KEYWORDS: tuple[str, ...] = (
-    "exchange rate", "fuel", "diesel", "petrol", "wage", "soap", "charcoal",
-    "firewood", "battery", "batteries", "basin", "hoe", "exercise book",
-    "school", "jerry can",
+# or exercise books. Moved to services/food_scope.py so routers/markets.py
+# can use the exact same filter instead of a second, independently-drifting
+# copy (see that module's docstring for the full history). Re-exported under
+# their original names here so this router's own code — and
+# tests/test_forecasts_food_scope.py, which asserts against `f._is_food_commodity`
+# directly — don't need to change.
+from backend.app.services.food_scope import (  # noqa: E402
+    FOOD_CATEGORIES,
+    NON_FOOD_COMMODITY_KEYWORDS,
+    is_food_commodity as _is_food_commodity,
 )
-
-
-def _is_food_commodity(name: str) -> bool:
-    lowered = str(name).lower()
-    return not any(kw in lowered for kw in NON_FOOD_COMMODITY_KEYWORDS)
 
 
 def _friendly_error(status_code: int, technical: str, friendly: str) -> HTTPException:
