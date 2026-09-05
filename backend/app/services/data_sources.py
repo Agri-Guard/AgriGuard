@@ -130,6 +130,25 @@ SOURCE_REGISTRY: list[DataSource] = [
             "of sync module than wfp_sync.py/fews_net_sync.py's metadata-poll pattern."
         ),
     ),
+    DataSource(
+        name="RATIN (Regional Agricultural Trade Intelligence Network)",
+        url="https://www.ratin.net",
+        status=SourceStatus.CATALOGUED,
+        cadence_note="Updated by EAGC as wholesale market reports arrive, roughly weekly",
+        credibility_note=(
+            "Run by the Eastern Africa Grain Council; originated as a joint "
+            "FEWS NET/USAID RATES/EAGC effort specifically for cross-border "
+            "grain trade intelligence in Kenya, Uganda, Tanzania, Burundi, and "
+            "Rwanda — maize, beans, and rice wholesale prices at a regional-"
+            "trade level WFP/FEWS NET don't cover the same way."
+        ),
+        catalogued_note=(
+            "Website-based market reports and bulletins, no documented public "
+            "REST API found — same document-based integration shape as UBOS, "
+            "not the metadata-poll pattern wfp_sync.py/fews_net_sync.py use."
+        ),
+        scope="East Africa (Uganda, Kenya, Tanzania, Burundi, Rwanda)",
+    ),
 ]
 
 

@@ -74,13 +74,18 @@ def test_predict_success():
     with patch("backend.app.main.predict_price", return_value=MOCK_PREDICT_RESULT):
         r = client.post("/api/v1/predict", json={
             "crop": "Maize",
-            "region": "Kampala",
+            # Mbarara, not Kampala: validate_input() checks region against
+            # model.list_markets(), which reads the real committed CSV —
+            # WFP's current export has no market literally named "Kampala"
+            # (its Kampala coverage is under "Owino"). Mbarara is present in
+            # every WFP Uganda snapshot this repo has shipped with.
+            "region": "Mbarara",
             "date": "2026-08-01",
         })
     assert r.status_code == 200
     body = r.json()
     assert body["crop"] == "Maize"
-    assert body["region"] == "Kampala"
+    assert body["region"] == "Mbarara"
     assert body["currency"] == "UGX"
     assert "predicted_price" in body
     assert body["recommendation"] in {"SELL", "HOLD", "STORE"}
@@ -115,7 +120,7 @@ def test_predict_model_not_ready():
                side_effect=ModelNotReadyError("Model not loaded")):
         r = client.post("/api/v1/predict", json={
             "crop": "Maize",
-            "region": "Kampala",
+            "region": "Mbarara",  # see test_predict_success for why not "Kampala"
             "date": "2026-08-01",
         })
     assert r.status_code == 503
