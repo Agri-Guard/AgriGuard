@@ -56,7 +56,7 @@ class _PriceHistoryChartState extends State<PriceHistoryChart> {
     // forecast without an extra tap.
     final viewport = _scrollCtrl.position.viewportDimension;
     final target = (histLen * _pxPerPoint) - viewport / 2;
-    _scrollCtrl.jumpTo(target.clamp(0, _scrollCtrl.position.maxScrollExtent));
+    _scrollCtrl.jumpTo(target.clamp(0, _scrollCtrl.position.maxScrollExtent).toDouble());
   }
 
   @override

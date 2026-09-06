@@ -336,7 +336,7 @@ class ApiService {
           predictedPrice: double.parse(lastPrice.toStringAsFixed(2)),
           lowerBound: double.parse((lastPrice - half).toStringAsFixed(2)),
           upperBound: double.parse((lastPrice + half).toStringAsFixed(2)),
-          confidence: (points.last.confidence / widen).clamp(0.0, 1.0),
+          confidence: (points.last.confidence / widen).clamp(0.0, 1.0).toDouble(),
         ),
       );
     }

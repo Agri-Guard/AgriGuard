@@ -1,0 +1,80 @@
+diff --git a/mobile/android/app/src/main/res/xml/network_security_config.xml b/mobile/android/app/src/main/res/xml/network_security_config.xml
+index af50149..47aff13 100644
+--- a/mobile/android/app/src/main/res/xml/network_security_config.xml
++++ b/mobile/android/app/src/main/res/xml/network_security_config.xml
+@@ -4,12 +4,20 @@
+   Android 9+ (API 28+) blocks cleartext traffic by default.
+   Add your specific LAN IP below instead of allowing it globally —
+   keeps things safe for anything that isn't your own dev server.
++
++  NOTE: 192.168.18.8 matches the LAN IP the desktop dashboard was actually
++  running on (seen in the AgriGuard dashboard screenshots) — the previous
++  192.168.1.42 here didn't match and would have silently blocked the
++  hidden dev-override path (Settings → About, tap version 7x) on a real
++  device. DHCP can still reassign this on your router at any time — if the
++  dev override stops connecting, check `ip addr` / `ifconfig` on the
++  machine running the backend and update this to match.
+ -->
+ <network-security-config>
+     <domain-config cleartextTrafficPermitted="true">
+         <!-- Android Emulator loopback alias -->
+         <domain includeSubdomains="false">10.0.2.2</domain>
+-        <!-- Replace with your machine's actual LAN IP for real-device testing -->
+-        <domain includeSubdomains="false">192.168.1.42</domain>
++        <!-- Keith's dev machine LAN IP — see note above -->
++        <domain includeSubdomains="false">192.168.18.8</domain>
+     </domain-config>
+ </network-security-config>
+diff --git a/mobile/lib/services/api_service.dart b/mobile/lib/services/api_service.dart
+index 3eed469..e3440c8 100644
+--- a/mobile/lib/services/api_service.dart
++++ b/mobile/lib/services/api_service.dart
+@@ -336,7 +336,7 @@ class ApiService {
+           predictedPrice: double.parse(lastPrice.toStringAsFixed(2)),
+           lowerBound: double.parse((lastPrice - half).toStringAsFixed(2)),
+           upperBound: double.parse((lastPrice + half).toStringAsFixed(2)),
+-          confidence: (points.last.confidence / widen).clamp(0.0, 1.0),
++          confidence: (points.last.confidence / widen).clamp(0.0, 1.0).toDouble(),
+         ),
+       );
+     }
+diff --git a/mobile/lib/widgets/price_history_chart.dart b/mobile/lib/widgets/price_history_chart.dart
+index d0acb35..29246a2 100644
+--- a/mobile/lib/widgets/price_history_chart.dart
++++ b/mobile/lib/widgets/price_history_chart.dart
+@@ -56,7 +56,7 @@ class _PriceHistoryChartState extends State<PriceHistoryChart> {
+     // forecast without an extra tap.
+     final viewport = _scrollCtrl.position.viewportDimension;
+     final target = (histLen * _pxPerPoint) - viewport / 2;
+-    _scrollCtrl.jumpTo(target.clamp(0, _scrollCtrl.position.maxScrollExtent));
++    _scrollCtrl.jumpTo(target.clamp(0, _scrollCtrl.position.maxScrollExtent).toDouble());
+   }
+ 
+   @override
+diff --git a/scripts/gen_offline_data.py b/scripts/gen_offline_data.py
+index 0e2b523..82fa7a6 100644
+--- a/scripts/gen_offline_data.py
++++ b/scripts/gen_offline_data.py
+@@ -406,10 +406,21 @@ def build_weather_bundle() -> dict:
+     weather now that it auto-syncs (see module docstring, fix #4).
+     """
+     from backend.app import models as _models  # noqa: F401 — registers WeatherReading before any query
+-    from backend.app.database import SessionLocal
++    from backend.app.database import SessionLocal, create_tables
+     from backend.app.models.price import Market
+     from backend.app.models.weather import WeatherReading
+ 
++    # Defensive, not redundant: main.py's startup calls this too, but this
++    # script is meant to be runnable standalone (a fresh CI runner, or
++    # Keith's machine before ./run.sh has ever started the backend once) —
++    # without this, a genuinely fresh SQLite file has no `markets` table at
++    # all yet, and the query below raised a raw
++    # "sqlalchemy.exc.OperationalError: no such table: markets" instead of
++    # the friendly "run a weather sync first" message a few lines down.
++    # create_tables() is CREATE TABLE IF NOT EXISTS — safe to call here even
++    # when the backend already created everything.
++    create_tables()
++
+     db = SessionLocal()
+     try:
+         markets_db = db.query(Market).filter(Market.is_active.is_(True)).all()

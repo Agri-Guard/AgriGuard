@@ -406,9 +406,20 @@ def build_weather_bundle() -> dict:
     weather now that it auto-syncs (see module docstring, fix #4).
     """
     from backend.app import models as _models  # noqa: F401 — registers WeatherReading before any query
-    from backend.app.database import SessionLocal
+    from backend.app.database import SessionLocal, create_tables
     from backend.app.models.price import Market
     from backend.app.models.weather import WeatherReading
+
+    # Defensive, not redundant: main.py's startup calls this too, but this
+    # script is meant to be runnable standalone (a fresh CI runner, or
+    # Keith's machine before ./run.sh has ever started the backend once) —
+    # without this, a genuinely fresh SQLite file has no `markets` table at
+    # all yet, and the query below raised a raw
+    # "sqlalchemy.exc.OperationalError: no such table: markets" instead of
+    # the friendly "run a weather sync first" message a few lines down.
+    # create_tables() is CREATE TABLE IF NOT EXISTS — safe to call here even
+    # when the backend already created everything.
+    create_tables()
 
     db = SessionLocal()
     try:
