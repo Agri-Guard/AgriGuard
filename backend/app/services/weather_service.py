@@ -145,31 +145,66 @@ class WeatherService:
     def bulk_upsert(self, rows: list[WeatherReadingCreate]) -> dict:
         """
         Upserts many readings in one call — what `scripts/load_weather.py`
-        uses when loading a whole processed CSV. Commits once at the end
-        rather than per-row, since a 365-day x 8-market historical file is
-        ~2,900 rows and per-row commits would be needlessly slow.
+        and `services/weather_sync.py`'s scheduled sync both use. Commits
+        once at the end rather than per-row, since a 365-day x 8-market
+        historical file is ~2,900 rows and per-row commits would be
+        needlessly slow.
+
+        Groups by market_id and fetches each market's existing rows for the
+        batch's date range in a single query, instead of one SELECT per row
+        (the previous version did exactly that — harmless on a one-off CLI
+        load, but weather_sync.py now calls this on every scheduled run with
+        ~100 rows/market, which turned into hundreds of individual SELECTs
+        per cycle, drowning out everything else in the console with
+        settings.debug=True's SQL echo). This does 1 validity check + 1
+        SELECT per market instead — ~9 queries total for an 8-market batch
+        instead of 800+.
 
         Returns a small summary dict rather than the full list of ORM
-        objects, since the caller (a CLI script) only needs counts.
+        objects, since the caller (a CLI script or the sync job) only needs
+        counts.
         """
+        if not rows:
+            return {"created": 0, "updated": 0, "skipped": 0, "total": 0}
+
         created, updated, skipped = 0, 0, 0
 
+        by_market: dict[int, list[WeatherReadingCreate]] = {}
         for row in rows:
-            market = self.db.get(Market, row.market_id)
-            if not market:
-                skipped += 1
+            by_market.setdefault(row.market_id, []).append(row)
+
+        valid_market_ids = {
+            m_id for (m_id,) in
+            self.db.query(Market.id).filter(Market.id.in_(by_market.keys())).all()
+        }
+
+        for market_id, market_rows in by_market.items():
+            if market_id not in valid_market_ids:
+                skipped += len(market_rows)
                 continue
 
-            existing = self.find_existing(row.market_id, row.reading_date, row.is_forecast)
-            payload = row.model_dump()
+            dates = {r.reading_date for r in market_rows}
+            existing_rows = (
+                self.db.query(WeatherReading)
+                .filter(
+                    WeatherReading.market_id == market_id,
+                    WeatherReading.reading_date.in_(dates),
+                )
+                .all()
+            )
+            existing_by_key = {(e.reading_date, e.is_forecast): e for e in existing_rows}
 
-            if existing:
-                for field, value in payload.items():
-                    setattr(existing, field, value)
-                updated += 1
-            else:
-                self.db.add(WeatherReading(**payload))
-                created += 1
+            for row in market_rows:
+                key = (row.reading_date, row.is_forecast)
+                payload = row.model_dump()
+                existing = existing_by_key.get(key)
+                if existing:
+                    for field, value in payload.items():
+                        setattr(existing, field, value)
+                    updated += 1
+                else:
+                    self.db.add(WeatherReading(**payload))
+                    created += 1
 
         self.db.commit()
         return {"created": created, "updated": updated, "skipped": skipped, "total": len(rows)}

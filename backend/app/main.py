@@ -11,6 +11,7 @@ Design principle:
 👉 Maximum reliability for live demo
 """
 
+import contextlib
 import logging
 from datetime import datetime
 
@@ -85,6 +86,44 @@ app.include_router(prices_router)
 _scheduler: BackgroundScheduler | None = None
 
 
+@contextlib.contextmanager
+def _quiet_sql_echo():
+    """
+    Background sync jobs run on every source's own interval (see
+    data_sources.py) plus once immediately on boot, and each can touch
+    hundreds of rows in one pass (weather_sync.py alone upserts ~100
+    rows/market x 8 markets). With DEBUG=true (SQLAlchemy's echo=True, see
+    database.py), every one of those rows' queries got printed — turning
+    ordinary startup into a wall of raw SQL before the console was usable
+    for anything else. This mutes SQL echo only for the duration of a
+    scheduled job; DEBUG=true still shows full SQL for anything you trigger
+    interactively (hitting an endpoint by hand, the dashboard's "Check for
+    updates now" button, etc.) — nothing about that behavior changes.
+    """
+    engine_logger = logging.getLogger("sqlalchemy.engine")
+    previous_level = engine_logger.level
+    engine_logger.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        engine_logger.setLevel(previous_level)
+
+
+def _scheduled_job(sync_fn):
+    """Wraps a sync module's sync_if_updated for the scheduler: quiets SQL
+    echo (see _quiet_sql_echo) and makes sure one source's unexpected
+    exception logs cleanly instead of potentially wedging the scheduler
+    thread — sync_if_updated() already catches its own known failure
+    modes and returns False, so this is just a last-resort backstop."""
+    def _job():
+        with _quiet_sql_echo():
+            try:
+                sync_fn()
+            except Exception:
+                logger.exception("Background sync job failed unexpectedly: %s", sync_fn.__module__)
+    return _job
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     create_tables()
@@ -104,7 +143,7 @@ def on_startup() -> None:
         for source in enabled:
             job_id = source.name.lower().replace(" ", "_").replace("(", "").replace(")", "")
             _scheduler.add_job(
-                source.sync_module.sync_if_updated,
+                _scheduled_job(source.sync_module.sync_if_updated),
                 "interval",
                 hours=source.interval_hours_flag,
                 id=job_id,
