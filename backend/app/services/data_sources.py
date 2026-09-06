@@ -1,6 +1,12 @@
 """
-backend/app/services/data_sources.py — Registry of AgriGuard's price-data sources
+backend/app/services/data_sources.py — Registry of AgriGuard's auto-synced data sources
 ================================================================================
+Covers both of AgriGuard's live feed types — crop/food prices (WFP, FEWS
+NET) and weather (Open-Meteo) — plus credible sources logged for the future
+that aren't wired up yet. "Market intelligence" (routers/markets.py) isn't
+listed separately: every one of its endpoints derives from the same price
+CSV WFP/FEWS NET sync keeps current, so it's already covered by those two
+entries rather than needing its own sync module.
 Problem this replaces: WFP (wfp_sync.py) and FEWS NET (fews_net_sync.py) were
 each wired into main.py's startup scheduler by hand, as two near-identical
 copy-pasted blocks (see the git history of main.py::on_startup). Adding a
@@ -33,7 +39,7 @@ from types import ModuleType
 from typing import Optional
 
 from backend.app.core.config import settings
-from backend.app.services import wfp_sync, fews_net_sync
+from backend.app.services import wfp_sync, fews_net_sync, weather_sync
 
 
 class SourceStatus(str, Enum):
@@ -82,6 +88,26 @@ SOURCE_REGISTRY: list[DataSource] = [
         sync_module=fews_net_sync,
         enabled_flag=settings.fews_net_sync_enabled,
         interval_hours_flag=settings.fews_net_sync_interval_hours,
+    ),
+    DataSource(
+        name="Open-Meteo Weather",
+        url="https://open-meteo.com",
+        status=SourceStatus.ACTIVE,
+        cadence_note=(
+            "Historical archive finalises within a few days; 16-day forecast "
+            "reissued daily — this sync re-pulls both on every cycle rather "
+            "than checking for a change first (see weather_sync.py)."
+        ),
+        credibility_note=(
+            "Free, no-API-key weather reanalysis + forecast service built on "
+            "national meteorological models (ECMWF, DWD, NOAA, etc.); the "
+            "temperature/rainfall/evapotranspiration inputs "
+            "GET /weather/analytics/drought-risk scores its drought signal from."
+        ),
+        sync_module=weather_sync,
+        enabled_flag=settings.weather_sync_enabled,
+        interval_hours_flag=settings.weather_sync_interval_hours,
+        scope="Uganda (8 markets: Kampala, Gulu, Mbarara, Mbale, Kasese, Lira, Jinja, Arua)",
     ),
     DataSource(
         name="FAO GIEWS Food Price Monitoring and Analysis (FPMA)",

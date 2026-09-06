@@ -12,6 +12,8 @@ Endpoints defined here:
   GET  /weather/{market_id}/forecast → 16-day-ahead forecast for one market
   GET  /weather/drought-risk       → drought-stress scoring per market
   GET  /weather/alerts/heavy-rain  → heavy-rain / flood-risk alerts
+  GET  /weather/sync/status        → when Open-Meteo was last auto-synced
+  POST /weather/sync               → trigger an on-demand sync now
 
 Design principles (matching routers/prices.py):
   - All DB access goes through the service layer (weather_service.py)
@@ -31,6 +33,7 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import Settings, settings as _settings
@@ -45,6 +48,7 @@ from backend.app.schemas.weather import (
     WeatherReadingSummary,
     WeatherTrendResponse,
 )
+from backend.app.services import weather_sync
 from backend.app.services.weather_service import WeatherService
 
 # =============================================================================
@@ -224,3 +228,37 @@ def get_heavy_rain_alerts(
         lookback_days=lookback_days,
         include_forecast=include_forecast,
     )
+
+
+# =============================================================================
+# LIVE SYNC — mirrors routers/forecasts.py's /sync/status + /sync for WFP
+# =============================================================================
+
+class WeatherSyncStatusResponse(BaseModel):
+    """Status of the background Open-Meteo weather sync (see services/weather_sync.py)."""
+    synced_at: Optional[str] = None       # When we last pulled fresh data (UTC ISO-8601)
+    markets_synced: Optional[int] = None  # How many markets succeeded on that run
+    markets_total: Optional[int] = None
+    lookback_days: Optional[int] = None
+    per_market: Optional[dict] = None     # Per-market {synced, created, updated, dropped_invalid, error}
+
+
+@router.get("/sync/status", response_model=WeatherSyncStatusResponse)
+def get_weather_sync_status():
+    """
+    When was weather last synced from Open-Meteo, and what did that run
+    cover. No network call — reads the local sync-state file.
+    """
+    return WeatherSyncStatusResponse(**weather_sync.last_sync_info())
+
+
+@router.post("/sync", response_model=WeatherSyncStatusResponse)
+def trigger_weather_sync():
+    """
+    On-demand version of the background weather sync job (see
+    services/weather_sync.py and its scheduled run in main.py's startup).
+    Seeds `markets` if needed, then re-pulls trailing history + 16-day
+    forecast for every covered market.
+    """
+    weather_sync.sync_if_updated()
+    return WeatherSyncStatusResponse(**weather_sync.last_sync_info())

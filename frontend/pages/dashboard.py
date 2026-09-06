@@ -300,6 +300,23 @@ else:
         unsafe_allow_html=True,
     )
 
+# ── Full source registry — every feed AgriGuard auto-syncs from today, plus
+# credible sources evaluated and logged for later (see services/data_sources.py)
+sources_data, sources_err = api("GET", "/forecasts/sources", base_url)
+with st.sidebar.expander("📡 Data sources", expanded=False):
+    if sources_data:
+        st.caption(f"**Auto-syncing now ({len(sources_data.get('active', []))})**")
+        for src in sources_data.get("active", []):
+            st.markdown(f"🟢 **{src['name']}** — {src['scope']}")
+            st.caption(src["cadence_note"])
+        st.divider()
+        st.caption(f"**Catalogued — credible, not yet wired up ({len(sources_data.get('catalogued', []))})**")
+        for src in sources_data.get("catalogued", []):
+            st.markdown(f"⚪ **{src['name']}** — {src['scope']}")
+            st.caption(src.get("note") or src["cadence_note"])
+    else:
+        st.caption(f"Couldn't load source registry: {sources_err}")
+
 # ── Live price-data sync status — WFP (deep history) + FEWS NET (fresher) ──
 sync_status, sync_status_err = api("GET", "/forecasts/sync/status", base_url)
 with st.sidebar.expander("🔄 Price data sync", expanded=False):
@@ -332,6 +349,32 @@ with st.sidebar.expander("🔄 Price data sync", expanded=False):
             st.success(f"Synced — {fews_result.get('row_count', 0)} observations through {fews_result.get('max_date', '—')}")
         else:
             st.error(f"Sync check failed: {fews_err}")
+
+# ── Live weather sync — Open-Meteo (historical + 16-day forecast) ──
+weather_sync_status, weather_sync_status_err = api("GET", "/weather/sync/status", base_url)
+with st.sidebar.expander("🌦️ Weather sync", expanded=False):
+    st.caption("**Open-Meteo** (temperature, rainfall, drought signal)")
+    if weather_sync_status and weather_sync_status.get("synced_at"):
+        st.caption(f"Last synced: {weather_sync_status['synced_at'][:19].replace('T', ' ')} UTC")
+        st.caption(
+            f"Markets covered: {weather_sync_status.get('markets_synced', '—')}"
+            f"/{weather_sync_status.get('markets_total', '—')}"
+            f" · lookback {weather_sync_status.get('lookback_days', '—')}d"
+        )
+    else:
+        st.caption("Not yet synced in this environment — drought-risk/alerts have no data until the first sync.")
+    if st.button("Check for updates now", use_container_width=True, key="weather_sync_btn"):
+        with st.spinner("Pulling trailing history + 16-day forecast from Open-Meteo…"):
+            weather_result, weather_err = api("POST", "/weather/sync", base_url)
+        if weather_result and weather_result.get("synced_at"):
+            st.success(
+                f"Synced — {weather_result.get('markets_synced', 0)}/"
+                f"{weather_result.get('markets_total', 0)} markets updated"
+            )
+        elif weather_result:
+            st.error("Sync ran but every market failed — check backend logs.")
+        else:
+            st.error(f"Sync check failed: {weather_err}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Forecast Settings")

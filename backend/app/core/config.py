@@ -64,6 +64,14 @@ class Settings:
     # focused on what it's actually for: recent, fresher-than-WFP prices.
     fews_net_lookback_days: int = int(os.getenv("FEWS_NET_LOOKBACK_DAYS", "730"))
 
+    # Open-Meteo weather — live sync (see backend/app/services/weather_sync.py).
+    # Open-Meteo has no "did anything change" metadata endpoint like HDX/FDW
+    # does, so each cycle just re-fetches a trailing window of history plus
+    # the 16-day forecast, rather than a check-then-download two-step.
+    weather_sync_enabled: bool = os.getenv("WEATHER_SYNC_ENABLED", "true").lower() == "true"
+    weather_sync_interval_hours: float = float(os.getenv("WEATHER_SYNC_INTERVAL_HOURS", "6"))
+    weather_sync_lookback_days: int = int(os.getenv("WEATHER_SYNC_LOOKBACK_DAYS", "90"))
+
     # Anthropic
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
 
