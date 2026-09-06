@@ -534,3 +534,344 @@ index 883eb97..5b10b8e 100644
  st.sidebar.markdown("---")
  st.sidebar.markdown("### ⚙️ Forecast Settings")
  
+diff --git a/scripts/gen_offline_data.py b/scripts/gen_offline_data.py
+index 696415b..0e2b523 100644
+--- a/scripts/gen_offline_data.py
++++ b/scripts/gen_offline_data.py
+@@ -2,8 +2,8 @@
+ scripts/gen_offline_data.py — Bundled offline snapshot for the mobile app
+ ==========================================================================
+ Regenerates mobile/assets/data/agriguard_offline_data.json and
+-mobile/assets/data/agriguard_weather_data.json from the committed raw
+-data (data/raw/wfp_food_prices_uga.csv, data/processed/weather/*.csv).
++mobile/assets/data/agriguard_weather_data.json from AgriGuard's live,
++auto-synced data — not a fixed CSV snapshot (see fix #4 below).
+ 
+ Why this exists: the mobile app ships without a live backend connection
+ by default, so it needs a static, pre-computed snapshot of forecasts,
+@@ -13,17 +13,18 @@ forecast-safety clamp that backend/app/routers/forecasts.py applies,
+ so the bundled data the mobile app shows never drifts from what the
+ live backend would return for the same commodity/market.
+ 
+-Run manually after data/raw/wfp_food_prices_uga.csv or the weather CSVs
+-change, then rebuild the Flutter app:
++Run after a fresh sync (or just periodically — every run reads whatever
++WFP/FEWS NET/weather last auto-synced to), then rebuild the Flutter app:
+     python3 scripts/gen_offline_data.py
+ 
+ Fixes applied here vs. the previous generation pass (see AgriGuard
+ memory notes / git history for the backend-side equivalents):
+   1. FOOD-ONLY SCOPE — previously every WFP commodity (including non-food
+      items like Basin, Batteries, Hoe, Jerrycan, Nails, Panga, Sanitary
+-     Pads, Soap, Torch, ...) was forecast and bundled. This mirrors
+-     forecasts.py's FOOD_CATEGORIES allowlist so only real crop/food
+-     commodities ever reach the app.
++     Pads, Soap, Torch, ...) was forecast and bundled. Now uses the same
++     services/food_scope.py filter routers/forecasts.py and
++     routers/markets.py both import, instead of a third, independently
++     drifting copy of the category allowlist.
+   2. RUNAWAY-FORECAST CLAMP — the old linear-extrapolation pass had no
+      equivalent of forecasts.py's _clamp_to_historical_range(), so a
+      naive slope fit on sparse/monthly data routinely produced forecasts
+@@ -34,11 +35,25 @@ memory notes / git history for the backend-side equivalents):
+      current_price field (the latest real observed price) so the app can
+      show "current vs predicted" without having to reach into the
+      separate history array.
++  4. LIVE SOURCES, NOT A STALE SNAPSHOT — this used to read
++     data/raw/wfp_food_prices_uga.csv (fine — wfp_sync.py keeps that file
++     itself live) but weather came from two hardcoded, date-stamped
++     filenames (uganda_weather_{historical,forecast}_2026-06-14.csv) that
++     stop existing the moment fetch_weather.py's next run writes a new
++     date into the filename — this had been silently failing since. Price
++     also never blended in FEWS NET's fresher feed the way the live
++     backend does. Now: prices blend WFP + FEWS NET exactly like
++     forecasts.py::load_price_data(), and weather reads straight from the
++     `weather_readings` table backend/app/services/weather_sync.py keeps
++     current — no filename to go stale. Each bundle also records the
++     upstream sync timestamp(s) it was built from (`sync_status` /
++     `last_synced_at`) so a stale bundle is visible, not silent.
+ """
+ 
+ from __future__ import annotations
+ 
+ import json
++import sys
+ from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+ 
+@@ -46,23 +61,14 @@ import numpy as np
+ import pandas as pd
+ 
+ ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))  # allow `python scripts/gen_offline_data.py` from repo root
++
++from backend.app.services import food_scope, fews_net_sync, wfp_sync, weather_sync  # noqa: E402
++
+ WFP_CSV = ROOT / "data" / "raw" / "wfp_food_prices_uga.csv"
+-WEATHER_HIST_CSV = ROOT / "data" / "processed" / "weather" / "uganda_weather_historical_2026-06-14.csv"
+-WEATHER_FCST_CSV = ROOT / "data" / "processed" / "weather" / "uganda_weather_forecast_2026-06-14.csv"
+ OUT_PRICES = ROOT / "mobile" / "assets" / "data" / "agriguard_offline_data.json"
+ OUT_WEATHER = ROOT / "mobile" / "assets" / "data" / "agriguard_weather_data.json"
+ 
+-# Mirrors backend/app/routers/forecasts.py::FOOD_CATEGORIES exactly.
+-FOOD_CATEGORIES = {
+-    "cereals and tubers",
+-    "pulses and nuts",
+-    "oil and fats",
+-    "vegetables and fruits",
+-    "miscellaneous food",
+-    "meat, fish and eggs",
+-    "milk and dairy",
+-}
+-
+ HORIZONS = (7, 14, 28)
+ ALERT_THRESHOLD_PCT = 5.0
+ MIN_OBSERVATIONS = 6          # bundled snapshot: a bit more lenient than the
+@@ -74,7 +80,24 @@ TRAINING_WINDOW_DAYS = 730
+ HISTORY_POINTS = 24            # trailing observations kept for the sparkline
+ 
+ 
+-def load_food_prices() -> pd.DataFrame:
++def _select_preferred_price_type(df: pd.DataFrame) -> pd.DataFrame:
++    """Prefer retail; fall back to wholesale only for commodity/market combos
++    with no retail rows at all. Same rule forecasts.py applies."""
++    if "pricetype" not in df.columns:
++        return df
++    retail = df[df["pricetype"].str.lower() == "retail"]
++    combos_with_retail = set(zip(retail["commodity"], retail["market"]))
++    wholesale_only = df[
++        (df["pricetype"].str.lower() == "wholesale")
++        & ~df[["commodity", "market"]].apply(tuple, axis=1).isin(combos_with_retail)
++    ]
++    return pd.concat([retail, wholesale_only], ignore_index=True)
++
++
++def load_wfp_prices() -> pd.DataFrame:
++    """WFP's deep-history feed — the same file wfp_sync.py keeps live via
++    its HDX metadata-poll + atomic swap, so this always reads whatever
++    that background sync last installed."""
+     df = pd.read_csv(WFP_CSV, low_memory=False)
+     df.columns = [c.strip().lower() for c in df.columns]
+     df["date"] = pd.to_datetime(df["date"], errors="coerce")
+@@ -83,20 +106,50 @@ def load_food_prices() -> pd.DataFrame:
+     df = df[df["price"] > 0]
+     df["commodity"] = df["commodity"].str.strip().str.title()
+     df["market"] = df["market"].str.strip().str.title()
++    df = _select_preferred_price_type(df)
++    return food_scope.filter_food_only(df, "WFP")
+ 
+-    # Prefer retail; fall back to wholesale if a combo has no retail rows.
+-    retail = df[df["pricetype"].str.lower() == "retail"]
+-    combos_with_retail = set(zip(retail["commodity"], retail["market"]))
+-    wholesale_only = df[
+-        (df["pricetype"].str.lower() == "wholesale")
+-        & ~df[["commodity", "market"]].apply(tuple, axis=1).isin(combos_with_retail)
+-    ]
+-    df = pd.concat([retail, wholesale_only], ignore_index=True)
+ 
+-    before = len(df)
+-    df = df[df["category"].astype(str).str.strip().str.lower().isin(FOOD_CATEGORIES)]
+-    print(f"Food-only filter: kept {len(df)} of {before} rows "
+-          f"(dropped {before - len(df)} non-food observations).")
++def load_fews_net_prices() -> pd.DataFrame:
++    """FEWS NET's fresher-cadence feed, blended on top of WFP below — see
++    backend/app/services/fews_net_sync.py. Returns an empty frame (not an
++    error) if it hasn't synced yet in this environment; WFP alone is a
++    perfectly fine bundle on its own."""
++    if not fews_net_sync.DATA_PATH.exists():
++        return pd.DataFrame()
++
++    df = pd.read_csv(fews_net_sync.DATA_PATH, low_memory=False)
++    if df.empty:
++        return df
++    df["date"] = pd.to_datetime(df["date"], errors="coerce")
++    df.rename(columns={"price_type": "pricetype"}, inplace=True)
++    df = _select_preferred_price_type(df)
++    return food_scope.filter_food_only(df, "FEWS NET")
++
++
++def load_food_prices() -> pd.DataFrame:
++    """
++    WFP's deep history blended with FEWS NET's fresher feed — identical
++    overlap-resolution rule to backend/app/routers/forecasts.py::load_price_data()
++    (FEWS NET wins on a (market, commodity, date) collision, WFP fills
++    every gap it doesn't cover). Both sources go through the shared
++    services/food_scope.py filter rather than a locally duplicated
++    category set, so this bundle can't quietly drift from what the live
++    backend serves for the same commodity/market.
++    """
++    wfp_df = load_wfp_prices()
++    fews_df = load_fews_net_prices()
++
++    if fews_df.empty:
++        df = wfp_df
++    else:
++        combined = pd.concat([fews_df, wfp_df], ignore_index=True)
++        df = combined.drop_duplicates(subset=["market", "commodity", "date"], keep="first")
++        print(
++            f"Blended price data: {len(wfp_df)} WFP + {len(fews_df)} FEWS NET "
++            f"-> {len(df)} observations after overlap resolution."
++        )
++
+     return df.sort_values("date").reset_index(drop=True)
+ 
+ 
+@@ -288,6 +341,10 @@ def build_price_bundle(df: pd.DataFrame) -> dict:
+     return {
+         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+         "data_as_of": all_data_as_of.strftime("%Y-%m-%d"),
++        "sync_status": {
++            "wfp_last_synced_at": wfp_sync.last_sync_info().get("synced_at"),
++            "fews_net_last_synced_at": fews_net_sync.last_sync_info().get("synced_at"),
++        },
+         "commodities": commodities,
+         "markets": markets,
+         "forecasts": forecasts,
+@@ -339,59 +396,99 @@ def _advisory(rainfall_7d: float, water_balance: float, temp_max: float) -> tupl
+ 
+ 
+ def build_weather_bundle() -> dict:
+-    if not WEATHER_HIST_CSV.exists() or not WEATHER_FCST_CSV.exists():
+-        print("Weather CSVs not found — skipping weather bundle.")
++    """
++    Reads weather straight from the `weather_readings` table
++    backend/app/services/weather_sync.py keeps live — not the two
++    hardcoded, date-stamped CSV filenames this used to point at
++    (uganda_weather_{historical,forecast}_2026-06-14.csv), which stop
++    existing the moment fetch_weather.py's next manual run writes a new
++    date into the filename. The DB is the actual source of truth for
++    weather now that it auto-syncs (see module docstring, fix #4).
++    """
++    from backend.app import models as _models  # noqa: F401 — registers WeatherReading before any query
++    from backend.app.database import SessionLocal
++    from backend.app.models.price import Market
++    from backend.app.models.weather import WeatherReading
++
++    db = SessionLocal()
++    try:
++        markets_db = db.query(Market).filter(Market.is_active.is_(True)).all()
++        if not markets_db:
++            print(
++                "No markets in the database yet — run a weather sync first "
++                "(POST /weather/sync, or start the backend once so its startup "
++                "scheduler runs it). Skipping weather bundle."
++            )
++            return {}
++
++        bundle_markets: dict[str, dict] = {}
++        today = pd.Timestamp.now().normalize()
++
++        for m in markets_db:
++            hist_rows = (
++                db.query(WeatherReading)
++                .filter(WeatherReading.market_id == m.id, WeatherReading.is_forecast.is_(False))
++                .order_by(WeatherReading.reading_date)
++                .all()
++            )
++            if not hist_rows:
++                continue  # no historical weather synced for this market yet
++
++            latest = hist_rows[-1]
++            last7 = hist_rows[-7:]
++            rainfall_7d = sum(r.rainfall_mm or 0.0 for r in last7)
++            balances = [r.water_balance_mm for r in last7 if r.water_balance_mm is not None]
++            water_balance = sum(balances) / len(balances) if balances else 0.0
++            risk_level, advice = _advisory(rainfall_7d, water_balance, latest.temp_max_c or 0.0)
++
++            fcst_rows = (
++                db.query(WeatherReading)
++                .filter(WeatherReading.market_id == m.id, WeatherReading.is_forecast.is_(True))
++                .order_by(WeatherReading.reading_date)
++                .all()
++            )
++            forecast_days = [
++                {
++                    "date": (today + timedelta(days=i + 1)).strftime("%Y-%m-%d"),
++                    "temp_max_c": round(r.temp_max_c, 1) if r.temp_max_c is not None else None,
++                    "temp_min_c": round(r.temp_min_c, 1) if r.temp_min_c is not None else None,
++                    "rainfall_mm": round(r.rainfall_mm, 1) if r.rainfall_mm is not None else None,
++                    "humidity_max_pct": round(r.humidity_max_pct, 0) if r.humidity_max_pct is not None else None,
++                }
++                for i, r in enumerate(fcst_rows)
++            ]
++
++            bundle_markets[m.name] = {
++                "market": m.name,
++                "region": m.region.value if hasattr(m.region, "value") else str(m.region),
++                "current": {
++                    "as_of": latest.reading_date.strftime("%Y-%m-%d"),
++                    "temp_max_c": round(latest.temp_max_c, 1) if latest.temp_max_c is not None else None,
++                    "temp_min_c": round(latest.temp_min_c, 1) if latest.temp_min_c is not None else None,
++                    "rainfall_mm": round(latest.rainfall_mm, 1) if latest.rainfall_mm is not None else None,
++                    "humidity_max_pct": round(latest.humidity_max_pct, 0) if latest.humidity_max_pct is not None else None,
++                    "wind_speed_max_kmh": round(latest.wind_speed_max_kmh, 1) if latest.wind_speed_max_kmh is not None else None,
++                },
++                "forecast": forecast_days,
++                "risk_level": risk_level,
++                "advice": advice,
++                "rainfall_last_7d_mm": round(rainfall_7d, 1),
++            }
++    finally:
++        db.close()
++
++    if not bundle_markets:
++        print(
++            "Markets exist but none have weather readings yet — run a weather "
++            "sync first (POST /weather/sync). Skipping weather bundle."
++        )
+         return {}
+ 
+-    hist = pd.read_csv(WEATHER_HIST_CSV, parse_dates=["date"])
+-    fcst = pd.read_csv(WEATHER_FCST_CSV, parse_dates=["date"])
+-    today = pd.Timestamp.now().normalize()
+-
+-    markets: dict[str, dict] = {}
+-    for market, group in hist.groupby("market"):
+-        group = group.sort_values("date")
+-        latest = group.iloc[-1]
+-        last7 = group.tail(7)
+-        rainfall_7d = float(last7["rainfall_mm"].sum())
+-        water_balance = float(last7["water_balance_mm"].mean())
+-        risk_level, advice = _advisory(rainfall_7d, water_balance, float(latest["temp_max_c"]))
+-
+-        fc_group = fcst[fcst["market"] == market].sort_values("date")
+-        forecast_days = []
+-        for i, (_, row) in enumerate(fc_group.iterrows()):
+-            # Same staleness fix as the price pipeline: the underlying
+-            # Open-Meteo pull is dated, but the day-to-day pattern it
+-            # captured is remapped onto the next N real calendar days so
+-            # the forecast always reads as "starting tomorrow".
+-            forecast_days.append({
+-                "date": (today + timedelta(days=i + 1)).strftime("%Y-%m-%d"),
+-                "temp_max_c": round(float(row["temp_max_c"]), 1),
+-                "temp_min_c": round(float(row["temp_min_c"]), 1),
+-                "rainfall_mm": round(float(row["rainfall_mm"]), 1),
+-                "humidity_max_pct": round(float(row["humidity_max_pct"]), 0),
+-            })
+-
+-        markets[market] = {
+-            "market": market,
+-            "region": str(latest["region"]),
+-            "current": {
+-                "as_of": latest["date"].strftime("%Y-%m-%d"),
+-                "temp_max_c": round(float(latest["temp_max_c"]), 1),
+-                "temp_min_c": round(float(latest["temp_min_c"]), 1),
+-                "rainfall_mm": round(float(latest["rainfall_mm"]), 1),
+-                "humidity_max_pct": round(float(latest["humidity_max_pct"]), 0),
+-                "wind_speed_max_kmh": round(float(latest["wind_speed_max_kmh"]), 1),
+-            },
+-            "forecast": forecast_days,
+-            "risk_level": risk_level,
+-            "advice": advice,
+-            "rainfall_last_7d_mm": round(rainfall_7d, 1),
+-        }
+-
+     return {
+         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+         "source": "Open-Meteo (bundled snapshot; live data used automatically when a backend is reachable)",
+-        "markets": markets,
++        "last_synced_at": weather_sync.last_sync_info().get("synced_at"),
++        "markets": bundle_markets,
+     }
+ 
+ 
