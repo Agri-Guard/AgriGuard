@@ -5,9 +5,23 @@ set -e
 
 echo "🚀 AgriGuard Launcher (native, no Docker)"
 
-# Pick python3 if available, fall back to python
-PYTHON_BIN="python3"
-command -v python3 >/dev/null 2>&1 || PYTHON_BIN="python"
+# Prefer Python 3.12/3.13 because the pinned scientific packages have
+# compatible wheels there. On Python 3.14, scikit-learn 1.5.0 falls back to a
+# lengthy source build and can make the launcher appear hung.
+PYTHON_BIN=""
+for candidate in python3.12 python3.13 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        PYTHON_BIN="$candidate"
+        break
+    fi
+done
+[ -n "$PYTHON_BIN" ] || PYTHON_BIN="python"
+
+PYTHON_VERSION=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+if [[ "$PYTHON_VERSION" == "3.14" ]]; then
+    echo "⚠️  Python 3.14 detected. Installing with this interpreter may build pinned ML packages from source."
+    echo "   Install Python 3.12 or 3.13 for the fastest and most reliable setup."
+fi
 
 # Cross-platform sha256
 sha256() {
@@ -18,20 +32,27 @@ sha256() {
     fi
 }
 
-# Virtual env
-if [ ! -d ".venv" ]; then
-    echo "→ Creating virtual environment..."
-    "$PYTHON_BIN" -m venv .venv
+# Use a version-specific environment when the existing .venv was created with
+# another Python version. This avoids silently reusing a broken 3.14 venv.
+VENV_DIR=".venv-${PYTHON_VERSION}"
+if [ -x ".venv/bin/python" ] && [ "$(".venv/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "$PYTHON_VERSION" ]; then
+    VENV_DIR=".venv"
 fi
 
-source .venv/bin/activate
+# Virtual env
+if [ ! -d "$VENV_DIR" ]; then
+    echo "→ Creating virtual environment..."
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+fi
+
+source "$VENV_DIR/bin/activate"
 
 # Smart dependency install (hash lives INSIDE .venv so a deleted venv forces reinstall)
 if [ -f "requirements.txt" ]; then
-    HASH_FILE=".venv/.requirements.hash"
-    CURRENT_HASH=$(sha256 requirements.txt)
+    HASH_FILE="$VENV_DIR/.requirements.hash"
+    CURRENT_HASH="${PYTHON_VERSION}:$(sha256 requirements.txt)"
 
-    if [ ! -f "$HASH_FILE" ] || [ "$(cat "$HASH_FILE")" != "$CURRENT_HASH" ]; then
+    if [ ! -f "$HASH_FILE" ] || [ "$(cat "$HASH_FILE")" != "$CURRENT_HASH" ] || ! python -c "import fastapi, pandas, sklearn, streamlit" >/dev/null 2>&1; then
         echo "→ Installing dependencies (one-time or after changes)..."
         pip install --upgrade pip
         pip install -r requirements.txt
