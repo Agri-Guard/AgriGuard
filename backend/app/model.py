@@ -161,15 +161,22 @@ def predict_price(commodity: str, market: str, year: int, month: int) -> dict:
     X = pd.DataFrame([row])[features]
     pred = float(_price_model.predict(X)[0])
 
-    # confidence interval: ±10 % (simple heuristic; replace with quantile regression)
+    # Use the model's held-out error when available. The 80% two-sided
+    # normal multiplier is a conservative approximation for this point
+    # forecast; never allow a zero-width interval.
+    metrics = _metrics.get("price_forecast", _metrics)
+    mae = float(metrics.get("MAE_UGX", 0.0) or 0.0)
+    residual_band = max(mae * 1.28, abs(pred) * 0.03)
     return {
         "commodity":    commodity,
         "market":       market,
         "year":         year,
         "month":        month,
         "predicted_price_ugx": round(pred, 2),
-        "lower_bound_ugx":     round(pred * 0.90, 2),
-        "upper_bound_ugx":     round(pred * 1.10, 2),
+        "lower_bound_ugx":     round(max(0.0, pred - residual_band), 2),
+        "upper_bound_ugx":     round(pred + residual_band, 2),
+        "latest_price_ugx":    round(float(hist["price"].iloc[-1]), 2) if not hist.empty else round(pred, 2),
+        "price_lag1":          round(float(hist["price"].iloc[-1]), 2) if not hist.empty else round(pred, 2),
         "currency":     "UGX",
     }
 

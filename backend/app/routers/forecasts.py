@@ -7,8 +7,9 @@ Forecast pipeline:
   1. Load and clean WFP Uganda price CSV, blended with the fresher-cadence
      FEWS NET (FDW) feed where the two overlap  (load_price_data)
   2. Filter to the requested commodity × market combination
-  3. Run Prophet (primary) or linear extrapolation (fallback)
-  4. Optionally blend with XGBoost residual correction if enough data
+   3. Run the shared rolling-origin validated ensemble from ml/pipeline.py
+      (robust level, damped trend, and monthly seasonal candidates)
+   4. Calibrate intervals from walk-forward residuals via quant_bridge
   5. Return structured ForecastResponse with trend label and alert
 
 Endpoints:
@@ -17,8 +18,8 @@ Endpoints:
   GET /forecasts/compare/{commodity}     → multi-market comparison
 
 Design notes:
-  - Prophet is an optional dependency; the router degrades gracefully to
-    linear extrapolation if it is not installed.
+  - Prophet is an optional last-resort dependency; the shared pipeline does
+    not require it and is the production default.
   - All price values are rounded to 2 decimal places before returning.
   - Confidence is derived from the relative width of the prediction interval
     and clamped to [0.0, 1.0] so clients never receive nonsense values.
@@ -587,6 +588,22 @@ def prophet_forecast(series: pd.DataFrame, horizon: int) -> tuple[pd.DataFrame, 
 
     Falls back to linear_extrapolation() if Prophet is not installed.
     """
+    # The production default is the shared, backtested pipeline.  It is
+    # deliberately independent of Prophet: WFP observations are irregular
+    # and generally too sparse to identify daily/yearly Prophet seasonality.
+    try:
+        from ml.pipeline import forecast_series
+
+        result = forecast_series(series, horizon)
+        logger.info(
+            "Backtested ensemble forecast: folds=%d validation_mae=%.2f",
+            result.folds,
+            result.mae,
+        )
+        return result.forecast, result.model
+    except (ImportError, ValueError):
+        logger.warning("Shared ML pipeline unavailable; using legacy fallback.")
+
     try:
         from prophet import Prophet  # type: ignore
 
@@ -868,8 +885,12 @@ def _build_forecast_response(
     points: list[ForecastPoint] = []
     for idx, (_, row) in enumerate(fc.iterrows()):
         if quant_result is not None:
+            # Backtest residuals calibrate the first-step error. Uncertainty
+            # must still grow with lead time rather than presenting the same
+            # confidence for tomorrow and day 90.
+            lead_scale = float(np.sqrt(idx + 1))
             lower, upper = quant_bridge.apply_halfwidth(
-                float(row["yhat"]), quant_result.halfwidth
+                float(row["yhat"]), quant_result.halfwidth * lead_scale
             )
             conf = quant_result.confidence
         else:

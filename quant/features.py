@@ -70,14 +70,17 @@ def add_lag_features(
     group_cols = list(group_cols)
     for step in lag_steps:
         frame[f"price_lag_{step}"] = frame.groupby(group_cols)[price_col].shift(step)
+    # Shift before rolling: the current target must never be part of a
+    # training feature. Including it made offline metrics optimistic and
+    # produced a train/serve mismatch in every live forecast.
     frame[f"price_roll_{roll_window}_avg"] = (
         frame.groupby(group_cols)[price_col].transform(
-            lambda s: s.rolling(roll_window, min_periods=1).mean()
+            lambda s: s.shift(1).rolling(roll_window, min_periods=1).mean()
         )
     )
     frame[f"price_roll_{roll_window}_std"] = (
         frame.groupby(group_cols)[price_col].transform(
-            lambda s: s.rolling(roll_window, min_periods=2).std()
+            lambda s: s.shift(1).rolling(roll_window, min_periods=2).std()
         )
     )
     return frame

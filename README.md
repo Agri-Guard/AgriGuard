@@ -20,7 +20,7 @@ AgriGuard exists to serve four things, and nothing else:
 |---|---|
 | FastAPI backend — forecasts, markets, USSD | **Working.** Wired into `main.py`, backed by the committed WFP CSV. |
 | Streamlit dashboard | **Working.** Reads from the backend over HTTP. |
-| Price forecasting (XGBoost / Prophet) | **Working**, trainable via `scripts/train_models.py`. |
+| Price forecasting (backtested ensemble / XGBoost) | **Working**, with rolling-origin validation and calibrated intervals. |
 | `prices` router (CRUD price observations, MySQL-backed) | **Not wired in.** See Known Issues. |
 | Weather data collection | **Working as a standalone script**, not yet joined into the forecasting features. See `data/README.md`. |
 | `scripts/validate_data.py` | **Working.** Run it directly: `python scripts/validate_data.py --weather-dir data/processed/weather`. |

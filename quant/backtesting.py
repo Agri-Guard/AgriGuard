@@ -96,17 +96,27 @@ def walk_forward_folds(
 def _default_model_factory():
     """Same model family as production (XGBRegressor) — lazy import so this
     module can be imported without xgboost installed unless actually used."""
-    from xgboost import XGBRegressor
+    try:
+        from xgboost import XGBRegressor
 
-    return XGBRegressor(
-        n_estimators=200,
-        learning_rate=0.05,
-        max_depth=4,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        random_state=42,
-        verbosity=0,
-    )
+        return XGBRegressor(
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=4,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            verbosity=0,
+        )
+    except ImportError:
+        # Keep live uncertainty calibration available in minimal API
+        # deployments. This deterministic tree model has the same sklearn
+        # estimator interface and is only a dependency fallback.
+        from sklearn.ensemble import HistGradientBoostingRegressor
+
+        return HistGradientBoostingRegressor(
+            max_iter=200, learning_rate=0.05, max_leaf_nodes=15, random_state=42
+        )
 
 
 def backtest_group(
