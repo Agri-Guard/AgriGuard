@@ -22,24 +22,22 @@ python scripts/train_models.py
 ```
 
 This feeds the **point-prediction** endpoint in `backend/app/model.py` —
-a single price estimate for a given crop×market.
+a single price estimate for a given crop×market. Its interval is calibrated
+from held-out MAE saved in `metrics.json`, not a fixed ±10% band.
 
-It is a *separate* thing from the **multi-day forecast curve** served by
-`backend/app/routers/forecasts.py` (`/forecasts/{commodity}`, `/forecasts/
-compare/...`), which fits Prophet (or a linear-extrapolation fallback) per
-request rather than loading a saved model — see that router's docstring.
-Neither of these two live paths currently reads anything produced by
-`quant/`.
+The multi-day forecast curve served by `backend/app/routers/forecasts.py`
+uses the shared [`ml/pipeline.py`](./pipeline.py) ensemble. It performs
+rolling-origin validation on the requested series, combines a robust level,
+damped trend, and monthly seasonal candidate, and widens intervals with
+lead time. Prophet remains an explicit fallback only when the shared
+pipeline cannot be imported or the input is invalid.
 
 ## `quant/`
 
-`quant/` (walk-forward backtesting, prediction intervals, per-series risk
-scoring, Prophet-vs-XGBoost model selection) is a separate, newer layer —
-see `quant/README.md`. It has its own production feature-generation step
-(`scripts/build_quant_features.py`) and its own tests
-(`quant/tests/`), and does not depend on anything in this directory.
-It is **not yet consulted by either live forecasting path above** — that's
-the next integration step, not something this cleanup did.
+`quant/` supplies the heavier offline XGBoost evaluation and interval
+calibration used as an enhancement by the live router. Its rolling features
+are strictly causal: rolling statistics are shifted before aggregation so
+the target row cannot leak into training.
 
 ## `ml/models/`
 

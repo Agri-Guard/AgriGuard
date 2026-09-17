@@ -29,7 +29,7 @@ from backend.app.schemas import (
 )
 
 from backend.app.validator import validate_input
-from backend.app.model import predict_price, ModelNotReadyError
+from backend.app.model import predict_price, status as model_status, ModelNotReadyError
 from backend.app.services import data_sources
 
 from backend.app.routers.forecasts import router as forecasts_router
@@ -213,7 +213,7 @@ def health_check():
         "status": "ok",
         "app": "AgriGuard MVP",
         "version": settings.app_version,
-        "ml_ready": True,
+        "ml_ready": bool(model_status()["price_model"] and model_status()["encoders"]),
         "validator_ready": True,
         "timestamp": datetime.utcnow().isoformat(),
     }
@@ -306,7 +306,8 @@ def predict_price_endpoint(payload: PricePredictionRequest):
     else:
         trend, recommendation = "stable", "HOLD"
 
-    # ±10% heuristic interval (see model.py) -> narrower interval = higher confidence
+    # The interval is calibrated from held-out training error in metrics.json,
+    # rather than a fixed percentage that is equally confident for every crop.
     interval_width = (result["upper_bound_ugx"] - result["lower_bound_ugx"]) / predicted if predicted else 1.0
     confidence = max(0.0, min(1.0, 1 - interval_width))
 
