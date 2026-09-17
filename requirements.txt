@@ -31,6 +31,7 @@ pyarrow==18.1.0            # parquet I/O — required by notebooks/ intermediate
 
 # Dashboard
 streamlit==1.57.0
+streamlit-autorefresh==1.0.1
 plotly==6.7.0
 matplotlib==3.10.9
 seaborn==0.13.2

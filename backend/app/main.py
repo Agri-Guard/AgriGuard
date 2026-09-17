@@ -209,12 +209,19 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 def health_check():
+    from backend.app.routers.forecasts import get_data_freshness
+
+    freshness = get_data_freshness()
     return {
         "status": "ok",
         "app": "AgriGuard MVP",
         "version": settings.app_version,
         "ml_ready": bool(model_status()["price_model"] and model_status()["encoders"]),
         "validator_ready": True,
+        "price_data_as_of": freshness.price_latest_date,
+        "price_data_lag_days": freshness.price_lag_days,
+        "price_data_freshness": freshness.price_freshness,
+        "weather_last_synced_at": freshness.weather_synced_at,
         "timestamp": datetime.utcnow().isoformat(),
     }
 
