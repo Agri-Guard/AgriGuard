@@ -130,14 +130,10 @@ temp_min_c, rainfall_mm, rain_mm, precip_hours, humidity_max_pct,
 humidity_min_pct, wind_speed_max_kmh, sunshine_seconds,
 et0_evapotranspiration_mm, water_balance_mm, fetched_at, data_source`
 
-**Known gap:** nothing in `backend/` or `ml/` currently reads from
-`data/raw/weather/` or `data/processed/weather/` — weather is collected but
-not yet joined into the price-forecasting feature set. The intended
-integration point (rainfall/drought-stress as a leading indicator of price
-spikes) is noted in `fetch_weather.py`'s docstring but not implemented. If
-you pick this up: join on `(market, date)`, watch for the market-name gap
-above, and mind the forecast/historical distinction when deciding what's
-safe to use for training vs. what's only safe for live inference context.
+The live backend does not use these committed files for current weather. It
+refreshes Open-Meteo directly through `weather_sync.py`, stores validated
+history and the 16-day forecast in the database, and exposes sync status
+through `GET /weather/sync/status` and `GET /forecasts/data-status`.
 
 **Refresh:**
 ```bash
