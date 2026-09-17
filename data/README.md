@@ -2,7 +2,7 @@
 
 Dataset card and directory layout for AgriGuard's two data sources: WFP crop
 prices (the core dataset every ML model and API route depends on) and
-Open-Meteo weather (collected, not yet wired into the forecasting pipeline).
+Open-Meteo weather, continuously synced by the running backend.
 
 ```
 data/
@@ -26,8 +26,9 @@ data/
 every consumer below hardcodes/defaults to it, so don't rename it without
 updating `config/.env`'s `AGRIGUARD_PRICE_DATA`.
 
-**Snapshot in this repo:** 8,240 rows, 2018-01-01 → 2026-07-01, no missing
-values in any column.
+**Snapshot in this repo:** a reference snapshot only. Its coverage date is
+not a promise of current data. The live backend reports the exact latest
+observation through `GET /forecasts/data-status`.
 
 **Schema:**
 
@@ -75,7 +76,7 @@ in `config/.env` are only needed for permissioned series). See
 reference. Synced by `backend/app/services/fews_net_sync.py`.
 
 **Why it exists alongside the WFP CSV above:** WFP is the deep historical
-backbone (2018–present) but is itself only refreshed monthly upstream and
+backbone (2006–present upstream) but is itself only refreshed monthly upstream and
 can lag before HDX republishes. FEWS NET tracks largely the same Uganda
 staple-food markets through an independent collection pipeline, so blending
 it in (see `load_price_data()` in `backend/app/routers/{forecasts,markets}.py`)
@@ -98,7 +99,7 @@ unit, price_type` shape as the WFP CSV (plus a `source` column set to
 `POST /forecasts/sync/fews-net`. Not committed to the repo — it's a live
 cache, regenerated on first sync in any environment.
 
-## 3. `raw/weather/` and `processed/weather/` — collected, not yet integrated
+## 3. `raw/weather/` and `processed/weather/` — offline fixtures
 
 `scripts/fetch_weather.py` pulls daily weather (temperature, rainfall,
 humidity, wind, evapotranspiration, plus a derived water-balance proxy) from
