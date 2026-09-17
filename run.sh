@@ -117,7 +117,12 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "🐍 Starting backend (uvicorn)..."
-uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload &
+UVICORN_ARGS=(backend.app.main:app --host 0.0.0.0 --port 8000)
+if [ "${AGRIGUARD_RELOAD:-false}" = "true" ]; then
+    UVICORN_ARGS+=(--reload)
+    echo "   Hot reload enabled via AGRIGUARD_RELOAD=true"
+fi
+uvicorn "${UVICORN_ARGS[@]}" &
 BACKEND_PID=$!
 
 # Wait for backend health before starting frontend

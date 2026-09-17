@@ -9,6 +9,7 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 # frontend/pages/ -> frontend/, so `from style import inject_style` resolves
 # regardless of the working directory Streamlit was launched from.
@@ -26,6 +27,7 @@ st.set_page_config(
 inject_style()
 st.title("📈 Crop Price Forecast")
 st.caption("ML-powered price predictions up to 90 days ahead")
+st_autorefresh(interval=15 * 60 * 1000, key="price_forecast_live_refresh")
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -78,6 +80,10 @@ def get_history(commodity: str, market: str, days: int):
     )
 
 
+def get_data_status():
+    return api_get("/forecasts/data-status", timeout=15)
+
+
 # ── sidebar controls ───────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Forecast Settings")
@@ -87,9 +93,18 @@ with st.sidebar:
     market    = st.selectbox("Market",    markets)
     horizon   = st.slider("Horizon (days)", 1, 90, 14)
     run       = st.button("Run Forecast", type="primary", use_container_width=True)
+    refresh   = st.button("Refresh live feeds now", use_container_width=True)
 
     st.divider()
-    st.caption("Powered by Prophet, with an XGBoost residual correction on top.")
+    st.caption("Sources refresh automatically; prices show the exact latest observation date.")
+
+if refresh:
+    with st.spinner("Refreshing WFP, FEWS NET, and weather feeds…"):
+        refreshed = api_get("/forecasts/sync/all", timeout=120)
+    if refreshed:
+        st.success("Live feed refresh completed.")
+        st.cache_data.clear()
+        st.rerun()
 
 
 # ── main area ──────────────────────────────────────────────────────────────
@@ -97,6 +112,7 @@ if run or True:   # auto-run on page load
     with st.spinner(f"Forecasting {commodity} in {market}… (first run per combo can take a bit)"):
         forecast_data = get_forecast(commodity, market, horizon)
         history_data  = get_history(commodity, market, days=365)
+        data_status   = get_data_status()
 
     if forecast_data is None:
         st.warning(
@@ -122,6 +138,9 @@ if run or True:   # auto-run on page load
     currency    = forecast_data.get("currency", "UGX")
     model_used  = forecast_data.get("model_used", "N/A")
     alert       = forecast_data.get("alert")
+    freshness   = forecast_data.get("freshness_status", "unknown")
+    latest_date = forecast_data.get("latest_observation_date", "unknown")
+    source      = forecast_data.get("price_source", "unknown")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Tomorrow",             f"{currency} {first_pred:,.0f}/{unit}")
@@ -131,6 +150,16 @@ if run or True:   # auto-run on page load
 
     if alert:
         st.warning(f"⚠️ {alert}")
+    if freshness == "stale":
+        st.error(
+            f"⚠️ Latest observed {commodity} price for {market} is from "
+            f"{latest_date} ({source}), not today. The upstream feed has not "
+            "published a newer market observation yet; the forecast is not a live quote."
+        )
+    else:
+        st.caption(f"Price data as of {latest_date} · source: {source} · freshness: {freshness}")
+    if data_status and data_status.get("weather_forecast_through"):
+        st.caption(f"Weather feed refreshed through {data_status['weather_forecast_through']}.")
 
     st.divider()
 
@@ -189,5 +218,6 @@ if run or True:   # auto-run on page load
     st.info(
         f"**Outlook:** {commodity} prices in {market} are forecast to **{trend}** "
         f"by **{abs(pct_change):.1f}%** over the next {horizon} days. "
-        f"Model used: `{model_used}`, trained on {forecast_data.get('observations_used', 'N/A')} observations."
+        f"Model used: `{model_used}`, trained on {forecast_data.get('observations_used', 'N/A')} observations. "
+        f"Price data is as of {latest_date} from {source}."
     )

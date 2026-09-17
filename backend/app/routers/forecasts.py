@@ -43,6 +43,7 @@ Author: AgriGuard Team
 
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -52,7 +53,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
-from backend.app.services import wfp_sync, fews_net_sync, quant_bridge, data_sources
+from backend.app.services import wfp_sync, fews_net_sync, weather_sync, quant_bridge, data_sources
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,11 @@ class ForecastResponse(BaseModel):
     generated_at: str          # UTC ISO-8601 timestamp
     data_quality: str = "sufficient"   # "sufficient" | "limited" — see naive_forecast()
     data_quality_note: Optional[str] = None  # Plain-language caveat when data_quality != "sufficient"
+    latest_observation_date: str
+    data_as_of: str
+    price_source: str
+    source_lag_days: int
+    freshness_status: str  # "live" | "recent" | "stale"
 
 
 class CommodityListResponse(BaseModel):
@@ -191,6 +197,21 @@ class FewsNetSyncStatusResponse(BaseModel):
     row_count: Optional[int] = None       # Observations in the last synced FEWS NET extract
     max_date: Optional[str] = None        # Most recent date covered by that extract
     synced_at: Optional[str] = None       # When we last pulled a fresh copy (UTC ISO-8601)
+
+
+class DataFreshnessResponse(BaseModel):
+    """Coverage and sync state for the feeds currently used by AgriGuard."""
+    price_latest_date: Optional[str] = None
+    price_source: Optional[str] = None
+    price_observations: int = 0
+    price_lag_days: Optional[int] = None
+    price_freshness: str = "unknown"
+    wfp_synced_at: Optional[str] = None
+    fews_net_synced_at: Optional[str] = None
+    fews_net_latest_date: Optional[str] = None
+    weather_synced_at: Optional[str] = None
+    weather_forecast_through: Optional[str] = None
+    checked_at: str
 
 
 class DataSourceInfo(BaseModel):
@@ -299,7 +320,7 @@ def _load_wfp_csv() -> pd.DataFrame:
     if "price_type" in df.columns:
         retail = df[df["price_type"].str.lower() == "retail"]
         if not retail.empty:
-            df = retail
+            df = retail.copy()
 
     # --- Food-only scope --------------------------------------------------
     # WFP's own "category" column is the authoritative signal here (see
@@ -472,6 +493,15 @@ def _latest_metadata(subset: pd.DataFrame) -> tuple[str, str]:
     currency = str(latest.get("currency", "UGX") or "UGX")
     unit = str(latest.get("unit", "KG") or "KG")
     return currency, unit
+
+
+def _freshness(date_value: pd.Timestamp) -> tuple[int, str]:
+    lag_days = max(0, (pd.Timestamp.now(tz="UTC").normalize().tz_localize(None) - date_value.normalize()).days)
+    if lag_days <= 7:
+        return lag_days, "live"
+    if lag_days <= 45:
+        return lag_days, "recent"
+    return lag_days, "stale"
 
 
 def _training_window(subset: pd.DataFrame, days: int = 730) -> pd.DataFrame:
@@ -866,6 +896,10 @@ def _build_forecast_response(
     handing back a Prophet forecast fit on almost nothing.
     """
     currency, unit = _latest_metadata(full_subset)
+    latest_date = pd.Timestamp(full_subset["date"].max())
+    lag_days, freshness = _freshness(latest_date)
+    latest_row = full_subset.loc[full_subset["date"].idxmax()]
+    price_source = str(latest_row.get("source", "WFP") or "WFP")
     sparse = len(train) < MIN_OBSERVATIONS
 
     if sparse:
@@ -947,6 +981,11 @@ def _build_forecast_response(
         generated_at=datetime.utcnow().isoformat() + "Z",
         data_quality=data_quality,
         data_quality_note=data_quality_note,
+        latest_observation_date=latest_date.strftime("%Y-%m-%d"),
+        data_as_of=latest_date.strftime("%Y-%m-%d"),
+        price_source=price_source,
+        source_lag_days=lag_days,
+        freshness_status=freshness,
     )
 
 
@@ -1006,6 +1045,39 @@ def trigger_fews_net_sync(force: bool = Query(default=False, description="Re-fet
     """
     fews_net_sync.sync_if_updated(force=force)
     return FewsNetSyncStatusResponse(**fews_net_sync.last_sync_info())
+
+
+@router.post("/sync/all", response_model=DataFreshnessResponse)
+def trigger_all_syncs():
+    """Refresh every configured live feed, then return the resulting coverage."""
+    wfp_sync.sync_if_updated()
+    fews_net_sync.sync_if_updated()
+    weather_sync.sync_if_updated()
+    return get_data_freshness()
+
+
+@router.get("/data-status", response_model=DataFreshnessResponse)
+def get_data_freshness():
+    """Return exact price coverage and last-sync timestamps; never implies today."""
+    df = load_price_data()
+    latest = pd.Timestamp(df["date"].max()) if not df.empty else None
+    lag, freshness = _freshness(latest) if latest is not None else (None, "unknown")
+    latest_row = df.loc[df["date"].idxmax()] if latest is not None else None
+    weather_state = weather_sync.last_sync_info()
+    fews_state = fews_net_sync.last_sync_info()
+    return DataFreshnessResponse(
+        price_latest_date=latest.strftime("%Y-%m-%d") if latest is not None else None,
+        price_source=str(latest_row.get("source", "WFP") or "WFP") if latest_row is not None else None,
+        price_observations=len(df),
+        price_lag_days=lag,
+        price_freshness=freshness,
+        wfp_synced_at=wfp_sync.last_sync_info().get("synced_at"),
+        fews_net_synced_at=fews_state.get("synced_at"),
+        fews_net_latest_date=fews_state.get("max_date"),
+        weather_synced_at=weather_state.get("synced_at"),
+        weather_forecast_through=weather_state.get("forecast_through"),
+        checked_at=datetime.utcnow().isoformat() + "Z",
+    )
 
 
 @router.get("/sources", response_model=SourcesResponse)
@@ -1098,7 +1170,8 @@ def get_price_history(
 # Prophet + XGBoost fitting is the expensive part of this endpoint (often
 # several seconds, more on a cold process), and the same combo is requested
 # repeatedly as users click around the dashboard — so cache the response.
-_FORECAST_CACHE: dict[tuple[str, str, int], "ForecastResponse"] = {}
+_FORECAST_CACHE: dict[tuple[str, str, int], tuple[float, "ForecastResponse"]] = {}
+_FORECAST_CACHE_TTL_SECONDS = 900
 
 
 @router.get("/{commodity}", response_model=ForecastResponse)
@@ -1136,7 +1209,10 @@ def get_forecast(
     cache_key = (commodity_title, resolved_market, horizon)
     cached = _FORECAST_CACHE.get(cache_key)
     if cached is not None:
-        return cached
+        cached_at, cached_response = cached
+        if time.monotonic() - cached_at < _FORECAST_CACHE_TTL_SECONDS:
+            return cached_response
+        _FORECAST_CACHE.pop(cache_key, None)
 
     train = _training_window(subset)
 
@@ -1165,7 +1241,7 @@ def get_forecast(
         full_subset=subset,
         horizon=horizon,
     )
-    _FORECAST_CACHE[cache_key] = response
+    _FORECAST_CACHE[cache_key] = (time.monotonic(), response)
     return response
 
 
