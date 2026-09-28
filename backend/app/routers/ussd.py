@@ -31,6 +31,8 @@ from datetime import datetime, timedelta
 import os
 import logging
 
+from backend.app.services.aliases import commodity_variants, resolve_series
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ussd", tags=["USSD"])
@@ -88,13 +90,11 @@ def load_data() -> pd.DataFrame:
 
 def get_latest_price(df: pd.DataFrame, commodity: str, market: str) -> Optional[dict]:
     """Return latest price info for a commodity-market pair."""
-    subset = df[
-        (df["commodity"].str.lower() == commodity.lower()) &
-        (df["market"].str.lower() == market.lower())
-    ].sort_values("date")
-
-    if subset.empty:
+    # Aliases (Kampala -> Owino, Maize -> Maize (White)) only fill genuine gaps.
+    hit = resolve_series(df, commodity, market)
+    if hit is None:
         return None
+    subset = hit.subset
 
     latest = subset.iloc[-1]
     currency = str(latest.get("currency", "UGX")) if "currency" in subset.columns else "UGX"
@@ -126,7 +126,8 @@ def get_latest_price(df: pd.DataFrame, commodity: str, market: str) -> Optional[
 
 def get_market_ranking(df: pd.DataFrame, commodity: str) -> list[dict]:
     """Rank all markets by latest price for a commodity (highest first)."""
-    markets = df[df["commodity"].str.lower() == commodity.lower()]["market"].unique()
+    variants = commodity_variants(commodity)
+    markets = df[df["commodity"].str.lower().isin(variants)]["market"].unique()
     results = []
     for mkt in markets:
         record = get_latest_price(df, commodity, mkt)

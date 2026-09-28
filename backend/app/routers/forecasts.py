@@ -42,7 +42,9 @@ Author: AgriGuard Team
 """
 
 import logging
+from dataclasses import dataclass
 import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -52,7 +54,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
-from backend.app.services import wfp_sync, fews_net_sync, quant_bridge, data_sources
+from backend.app.services import wfp_sync, fews_net_sync, weather_sync, quant_bridge, data_sources
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +95,7 @@ ALERT_THRESHOLD_PCT: float = 5.0
 # their original names here so this router's own code — and
 # tests/test_forecasts_food_scope.py, which asserts against `f._is_food_commodity`
 # directly — don't need to change.
+from backend.app.services.aliases import resolve_series
 from backend.app.services.food_scope import (  # noqa: E402
     FOOD_CATEGORIES,
     NON_FOOD_COMMODITY_KEYWORDS,
@@ -140,6 +143,14 @@ class ForecastResponse(BaseModel):
     generated_at: str          # UTC ISO-8601 timestamp
     data_quality: str = "sufficient"   # "sufficient" | "limited" — see naive_forecast()
     data_quality_note: Optional[str] = None  # Plain-language caveat when data_quality != "sufficient"
+    latest_observation_date: str
+    data_as_of: str
+    price_source: str
+    source_lag_days: int
+    freshness_status: str  # "live" | "recent" | "stale"
+    requested_market: Optional[str] = None   # what the caller asked for
+    market_fallback: bool = False            # True = a DIFFERENT market was substituted
+    market_note: Optional[str] = None        # plain-language explanation when names differ
 
 
 class CommodityListResponse(BaseModel):
@@ -191,6 +202,21 @@ class FewsNetSyncStatusResponse(BaseModel):
     row_count: Optional[int] = None       # Observations in the last synced FEWS NET extract
     max_date: Optional[str] = None        # Most recent date covered by that extract
     synced_at: Optional[str] = None       # When we last pulled a fresh copy (UTC ISO-8601)
+
+
+class DataFreshnessResponse(BaseModel):
+    """Coverage and sync state for the feeds currently used by AgriGuard."""
+    price_latest_date: Optional[str] = None
+    price_source: Optional[str] = None
+    price_observations: int = 0
+    price_lag_days: Optional[int] = None
+    price_freshness: str = "unknown"
+    wfp_synced_at: Optional[str] = None
+    fews_net_synced_at: Optional[str] = None
+    fews_net_latest_date: Optional[str] = None
+    weather_synced_at: Optional[str] = None
+    weather_forecast_through: Optional[str] = None
+    checked_at: str
 
 
 class DataSourceInfo(BaseModel):
@@ -299,7 +325,7 @@ def _load_wfp_csv() -> pd.DataFrame:
     if "price_type" in df.columns:
         retail = df[df["price_type"].str.lower() == "retail"]
         if not retail.empty:
-            df = retail
+            df = retail.copy()
 
     # --- Food-only scope --------------------------------------------------
     # WFP's own "category" column is the authoritative signal here (see
@@ -418,43 +444,49 @@ load_price_data._cache = None
 # Filtering helpers
 # =============================================================================
 
-def _filter_subset(
-    df: pd.DataFrame,
-    commodity: str,
-    market: str,
-) -> tuple[pd.DataFrame, str]:
-    """
-    Filter the full DataFrame to the requested commodity × market.
+@dataclass(frozen=True)
+class _Resolution:
+    subset: pd.DataFrame
+    market: str            # market name as recorded in the data
+    kind: str              # "exact" | "alias" | "fallback"
+    note: Optional[str]    # human-readable explanation (None when exact)
 
-    Fallback chain:
-      1. Exact commodity + market match
-      2. Commodity only (any market) — use the most common market
-      3. Raise 404
 
-    Returns:
-        (filtered_df, resolved_market_name)
+def _resolve_subset(df: pd.DataFrame, commodity: str, market: str) -> _Resolution:
     """
+    Resolve commodity x market to a price series, and say HOW it matched.
+
+      1. exact / alias match (e.g. Kampala -> Owino, Maize -> Maize (White))
+      2. fallback: same commodity, the market with the most data. This is a
+         DIFFERENT market from the one requested, so it is flagged
+         (kind="fallback") and callers must surface it, never hide it.
+      3. 404
+    """
+    hit = resolve_series(df, commodity, market)
+    if hit is not None:
+        note = None
+        if hit.aliased:
+            note = (
+                f"Showing {hit.commodity} at {hit.market} market for your request "
+                f"({commodity} in {market}) - the WFP feed records it under those names."
+            )
+        return _Resolution(hit.subset, hit.market, "alias" if hit.aliased else "exact", note)
+
     c_lower = commodity.lower()
-    m_lower = market.lower()
-
-    subset = df[
-        (df["commodity"].str.lower() == c_lower)
-        & (df["market"].str.lower() == m_lower)
-    ].copy()
-
-    if not subset.empty:
-        return subset.sort_values("date").reset_index(drop=True), market
-
-    # Fallback: commodity in any market
     subset = df[df["commodity"].str.lower() == c_lower].copy()
     if not subset.empty:
         resolved_market = subset["market"].mode()[0]
         logger.warning(
-            "No data for %s in %s — falling back to %s",
-            commodity, market, resolved_market,
+            "No data for %s in %s - falling back to %s", commodity, market, resolved_market,
         )
         subset = subset[subset["market"] == resolved_market].copy()
-        return subset.sort_values("date").reset_index(drop=True), resolved_market
+        return _Resolution(
+            subset.sort_values("date").reset_index(drop=True),
+            resolved_market,
+            "fallback",
+            f"No {commodity} price data for {market}. Showing {resolved_market} instead - "
+            f"this is NOT a {market} forecast.",
+        )
 
     raise _friendly_error(
         status_code=404,
@@ -466,12 +498,40 @@ def _filter_subset(
     )
 
 
+def _filter_subset(
+    df: pd.DataFrame,
+    commodity: str,
+    market: str,
+) -> tuple[pd.DataFrame, str]:
+    """Back-compat wrapper: (series, resolved_market). See _resolve_subset."""
+    r = _resolve_subset(df, commodity, market)
+    return r.subset, r.market
+
+
+def _annotate(resp: "ForecastResponse", requested_market: str, res: _Resolution) -> "ForecastResponse":
+    """Per-request copy of a (possibly cached) response with match provenance."""
+    return resp.model_copy(update={
+        "requested_market": requested_market,
+        "market_fallback": res.kind == "fallback",
+        "market_note": res.note,
+    })
+
+
 def _latest_metadata(subset: pd.DataFrame) -> tuple[str, str]:
     """Extract currency and unit from the most recent row in the subset."""
     latest = subset.iloc[-1]
     currency = str(latest.get("currency", "UGX") or "UGX")
     unit = str(latest.get("unit", "KG") or "KG")
     return currency, unit
+
+
+def _freshness(date_value: pd.Timestamp) -> tuple[int, str]:
+    lag_days = max(0, (pd.Timestamp.now(tz="UTC").normalize().tz_localize(None) - date_value.normalize()).days)
+    if lag_days <= 7:
+        return lag_days, "live"
+    if lag_days <= 45:
+        return lag_days, "recent"
+    return lag_days, "stale"
 
 
 def _training_window(subset: pd.DataFrame, days: int = 730) -> pd.DataFrame:
@@ -866,6 +926,10 @@ def _build_forecast_response(
     handing back a Prophet forecast fit on almost nothing.
     """
     currency, unit = _latest_metadata(full_subset)
+    latest_date = pd.Timestamp(full_subset["date"].max())
+    lag_days, freshness = _freshness(latest_date)
+    latest_row = full_subset.loc[full_subset["date"].idxmax()]
+    price_source = str(latest_row.get("source", "WFP") or "WFP")
     sparse = len(train) < MIN_OBSERVATIONS
 
     if sparse:
@@ -947,6 +1011,11 @@ def _build_forecast_response(
         generated_at=datetime.utcnow().isoformat() + "Z",
         data_quality=data_quality,
         data_quality_note=data_quality_note,
+        latest_observation_date=latest_date.strftime("%Y-%m-%d"),
+        data_as_of=latest_date.strftime("%Y-%m-%d"),
+        price_source=price_source,
+        source_lag_days=lag_days,
+        freshness_status=freshness,
     )
 
 
@@ -1006,6 +1075,39 @@ def trigger_fews_net_sync(force: bool = Query(default=False, description="Re-fet
     """
     fews_net_sync.sync_if_updated(force=force)
     return FewsNetSyncStatusResponse(**fews_net_sync.last_sync_info())
+
+
+@router.post("/sync/all", response_model=DataFreshnessResponse)
+def trigger_all_syncs():
+    """Refresh every configured live feed, then return the resulting coverage."""
+    wfp_sync.sync_if_updated()
+    fews_net_sync.sync_if_updated()
+    weather_sync.sync_if_updated()
+    return get_data_freshness()
+
+
+@router.get("/data-status", response_model=DataFreshnessResponse)
+def get_data_freshness():
+    """Return exact price coverage and last-sync timestamps; never implies today."""
+    df = load_price_data()
+    latest = pd.Timestamp(df["date"].max()) if not df.empty else None
+    lag, freshness = _freshness(latest) if latest is not None else (None, "unknown")
+    latest_row = df.loc[df["date"].idxmax()] if latest is not None else None
+    weather_state = weather_sync.last_sync_info()
+    fews_state = fews_net_sync.last_sync_info()
+    return DataFreshnessResponse(
+        price_latest_date=latest.strftime("%Y-%m-%d") if latest is not None else None,
+        price_source=str(latest_row.get("source", "WFP") or "WFP") if latest_row is not None else None,
+        price_observations=len(df),
+        price_lag_days=lag,
+        price_freshness=freshness,
+        wfp_synced_at=wfp_sync.last_sync_info().get("synced_at"),
+        fews_net_synced_at=fews_state.get("synced_at"),
+        fews_net_latest_date=fews_state.get("max_date"),
+        weather_synced_at=weather_state.get("synced_at"),
+        weather_forecast_through=weather_state.get("forecast_through"),
+        checked_at=datetime.utcnow().isoformat() + "Z",
+    )
 
 
 @router.get("/sources", response_model=SourcesResponse)
@@ -1098,7 +1200,8 @@ def get_price_history(
 # Prophet + XGBoost fitting is the expensive part of this endpoint (often
 # several seconds, more on a cold process), and the same combo is requested
 # repeatedly as users click around the dashboard — so cache the response.
-_FORECAST_CACHE: dict[tuple[str, str, int], "ForecastResponse"] = {}
+_FORECAST_CACHE: dict[tuple[str, str, int], tuple[float, "ForecastResponse"]] = {}
+_FORECAST_CACHE_TTL_SECONDS = 900
 
 
 @router.get("/{commodity}", response_model=ForecastResponse)
@@ -1131,12 +1234,16 @@ def get_forecast(
     commodity_title = commodity.strip().title()
     market_title = market.strip().title()
 
-    subset, resolved_market = _filter_subset(df, commodity_title, market_title)
+    res = _resolve_subset(df, commodity_title, market_title)
+    subset, resolved_market = res.subset, res.market
 
     cache_key = (commodity_title, resolved_market, horizon)
     cached = _FORECAST_CACHE.get(cache_key)
     if cached is not None:
-        return cached
+        cached_at, cached_response = cached
+        if time.monotonic() - cached_at < _FORECAST_CACHE_TTL_SECONDS:
+            return _annotate(cached_response, market_title, res)
+        _FORECAST_CACHE.pop(cache_key, None)
 
     train = _training_window(subset)
 
@@ -1165,8 +1272,8 @@ def get_forecast(
         full_subset=subset,
         horizon=horizon,
     )
-    _FORECAST_CACHE[cache_key] = response
-    return response
+    _FORECAST_CACHE[cache_key] = (time.monotonic(), response)
+    return _annotate(response, market_title, res)
 
 
 @router.get("/compare/{commodity}", response_model=CompareResponse)
@@ -1208,7 +1315,13 @@ def compare_markets(
 
     for mkt in market_list:
         try:
-            subset, resolved_market = _filter_subset(df, commodity_title, mkt)
+            res = _resolve_subset(df, commodity_title, mkt)
+            if res.kind == "fallback":
+                # A comparison must not show another market's numbers under
+                # this market's name (or duplicate one market three times).
+                skipped.append(mkt)
+                continue
+            subset, resolved_market = res.subset, res.market
             train = _training_window(subset)
 
             if len(train) < ABSOLUTE_MIN_OBSERVATIONS:
@@ -1226,7 +1339,7 @@ def compare_markets(
                 full_subset=subset,
                 horizon=horizon,
             )
-            results.append(result)
+            results.append(_annotate(result, mkt, res))
 
         except HTTPException:
             skipped.append(mkt)
