@@ -58,3 +58,8 @@ Thumbs.db
 *.sqlite
 agriguard_dev.db
 backend/.env
+*.patch
+*.db
+data/raw/.weather_sync_state.json
+.venv*/
+.pytest_cache/
