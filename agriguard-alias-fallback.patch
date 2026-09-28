@@ -1,0 +1,470 @@
+diff --git a/backend/app/routers/forecasts.py b/backend/app/routers/forecasts.py
+index 8989071..333ceb4 100644
+--- a/backend/app/routers/forecasts.py
++++ b/backend/app/routers/forecasts.py
+@@ -42,6 +42,7 @@ Author: AgriGuard Team
+ """
+ 
+ import logging
++from dataclasses import dataclass
+ import os
+ import time
+ from datetime import datetime, timedelta
+@@ -94,6 +95,7 @@ ALERT_THRESHOLD_PCT: float = 5.0
+ # their original names here so this router's own code — and
+ # tests/test_forecasts_food_scope.py, which asserts against `f._is_food_commodity`
+ # directly — don't need to change.
++from backend.app.services.aliases import resolve_series
+ from backend.app.services.food_scope import (  # noqa: E402
+     FOOD_CATEGORIES,
+     NON_FOOD_COMMODITY_KEYWORDS,
+@@ -146,6 +148,9 @@ class ForecastResponse(BaseModel):
+     price_source: str
+     source_lag_days: int
+     freshness_status: str  # "live" | "recent" | "stale"
++    requested_market: Optional[str] = None   # what the caller asked for
++    market_fallback: bool = False            # True = a DIFFERENT market was substituted
++    market_note: Optional[str] = None        # plain-language explanation when names differ
+ 
+ 
+ class CommodityListResponse(BaseModel):
+@@ -439,43 +444,49 @@ load_price_data._cache = None
+ # Filtering helpers
+ # =============================================================================
+ 
+-def _filter_subset(
+-    df: pd.DataFrame,
+-    commodity: str,
+-    market: str,
+-) -> tuple[pd.DataFrame, str]:
+-    """
+-    Filter the full DataFrame to the requested commodity × market.
++@dataclass(frozen=True)
++class _Resolution:
++    subset: pd.DataFrame
++    market: str            # market name as recorded in the data
++    kind: str              # "exact" | "alias" | "fallback"
++    note: Optional[str]    # human-readable explanation (None when exact)
+ 
+-    Fallback chain:
+-      1. Exact commodity + market match
+-      2. Commodity only (any market) — use the most common market
+-      3. Raise 404
+ 
+-    Returns:
+-        (filtered_df, resolved_market_name)
++def _resolve_subset(df: pd.DataFrame, commodity: str, market: str) -> _Resolution:
+     """
+-    c_lower = commodity.lower()
+-    m_lower = market.lower()
+-
+-    subset = df[
+-        (df["commodity"].str.lower() == c_lower)
+-        & (df["market"].str.lower() == m_lower)
+-    ].copy()
++    Resolve commodity x market to a price series, and say HOW it matched.
+ 
+-    if not subset.empty:
+-        return subset.sort_values("date").reset_index(drop=True), market
++      1. exact / alias match (e.g. Kampala -> Owino, Maize -> Maize (White))
++      2. fallback: same commodity, the market with the most data. This is a
++         DIFFERENT market from the one requested, so it is flagged
++         (kind="fallback") and callers must surface it, never hide it.
++      3. 404
++    """
++    hit = resolve_series(df, commodity, market)
++    if hit is not None:
++        note = None
++        if hit.aliased:
++            note = (
++                f"Showing {hit.commodity} at {hit.market} market for your request "
++                f"({commodity} in {market}) - the WFP feed records it under those names."
++            )
++        return _Resolution(hit.subset, hit.market, "alias" if hit.aliased else "exact", note)
+ 
+-    # Fallback: commodity in any market
++    c_lower = commodity.lower()
+     subset = df[df["commodity"].str.lower() == c_lower].copy()
+     if not subset.empty:
+         resolved_market = subset["market"].mode()[0]
+         logger.warning(
+-            "No data for %s in %s — falling back to %s",
+-            commodity, market, resolved_market,
++            "No data for %s in %s - falling back to %s", commodity, market, resolved_market,
+         )
+         subset = subset[subset["market"] == resolved_market].copy()
+-        return subset.sort_values("date").reset_index(drop=True), resolved_market
++        return _Resolution(
++            subset.sort_values("date").reset_index(drop=True),
++            resolved_market,
++            "fallback",
++            f"No {commodity} price data for {market}. Showing {resolved_market} instead - "
++            f"this is NOT a {market} forecast.",
++        )
+ 
+     raise _friendly_error(
+         status_code=404,
+@@ -487,6 +498,25 @@ def _filter_subset(
+     )
+ 
+ 
++def _filter_subset(
++    df: pd.DataFrame,
++    commodity: str,
++    market: str,
++) -> tuple[pd.DataFrame, str]:
++    """Back-compat wrapper: (series, resolved_market). See _resolve_subset."""
++    r = _resolve_subset(df, commodity, market)
++    return r.subset, r.market
++
++
++def _annotate(resp: "ForecastResponse", requested_market: str, res: _Resolution) -> "ForecastResponse":
++    """Per-request copy of a (possibly cached) response with match provenance."""
++    return resp.model_copy(update={
++        "requested_market": requested_market,
++        "market_fallback": res.kind == "fallback",
++        "market_note": res.note,
++    })
++
++
+ def _latest_metadata(subset: pd.DataFrame) -> tuple[str, str]:
+     """Extract currency and unit from the most recent row in the subset."""
+     latest = subset.iloc[-1]
+@@ -1204,14 +1234,15 @@ def get_forecast(
+     commodity_title = commodity.strip().title()
+     market_title = market.strip().title()
+ 
+-    subset, resolved_market = _filter_subset(df, commodity_title, market_title)
++    res = _resolve_subset(df, commodity_title, market_title)
++    subset, resolved_market = res.subset, res.market
+ 
+     cache_key = (commodity_title, resolved_market, horizon)
+     cached = _FORECAST_CACHE.get(cache_key)
+     if cached is not None:
+         cached_at, cached_response = cached
+         if time.monotonic() - cached_at < _FORECAST_CACHE_TTL_SECONDS:
+-            return cached_response
++            return _annotate(cached_response, market_title, res)
+         _FORECAST_CACHE.pop(cache_key, None)
+ 
+     train = _training_window(subset)
+@@ -1242,7 +1273,7 @@ def get_forecast(
+         horizon=horizon,
+     )
+     _FORECAST_CACHE[cache_key] = (time.monotonic(), response)
+-    return response
++    return _annotate(response, market_title, res)
+ 
+ 
+ @router.get("/compare/{commodity}", response_model=CompareResponse)
+@@ -1284,7 +1315,13 @@ def compare_markets(
+ 
+     for mkt in market_list:
+         try:
+-            subset, resolved_market = _filter_subset(df, commodity_title, mkt)
++            res = _resolve_subset(df, commodity_title, mkt)
++            if res.kind == "fallback":
++                # A comparison must not show another market's numbers under
++                # this market's name (or duplicate one market three times).
++                skipped.append(mkt)
++                continue
++            subset, resolved_market = res.subset, res.market
+             train = _training_window(subset)
+ 
+             if len(train) < ABSOLUTE_MIN_OBSERVATIONS:
+@@ -1302,7 +1339,7 @@ def compare_markets(
+                 full_subset=subset,
+                 horizon=horizon,
+             )
+-            results.append(result)
++            results.append(_annotate(result, mkt, res))
+ 
+         except HTTPException:
+             skipped.append(mkt)
+diff --git a/backend/app/routers/ussd.py b/backend/app/routers/ussd.py
+index 5c44b8a..3760ea3 100644
+--- a/backend/app/routers/ussd.py
++++ b/backend/app/routers/ussd.py
+@@ -31,6 +31,8 @@ from datetime import datetime, timedelta
+ import os
+ import logging
+ 
++from backend.app.services.aliases import commodity_variants, resolve_series
++
+ logger = logging.getLogger(__name__)
+ 
+ router = APIRouter(prefix="/ussd", tags=["USSD"])
+@@ -88,13 +90,11 @@ def load_data() -> pd.DataFrame:
+ 
+ def get_latest_price(df: pd.DataFrame, commodity: str, market: str) -> Optional[dict]:
+     """Return latest price info for a commodity-market pair."""
+-    subset = df[
+-        (df["commodity"].str.lower() == commodity.lower()) &
+-        (df["market"].str.lower() == market.lower())
+-    ].sort_values("date")
+-
+-    if subset.empty:
++    # Aliases (Kampala -> Owino, Maize -> Maize (White)) only fill genuine gaps.
++    hit = resolve_series(df, commodity, market)
++    if hit is None:
+         return None
++    subset = hit.subset
+ 
+     latest = subset.iloc[-1]
+     currency = str(latest.get("currency", "UGX")) if "currency" in subset.columns else "UGX"
+@@ -126,7 +126,8 @@ def get_latest_price(df: pd.DataFrame, commodity: str, market: str) -> Optional[
+ 
+ def get_market_ranking(df: pd.DataFrame, commodity: str) -> list[dict]:
+     """Rank all markets by latest price for a commodity (highest first)."""
+-    markets = df[df["commodity"].str.lower() == commodity.lower()]["market"].unique()
++    variants = commodity_variants(commodity)
++    markets = df[df["commodity"].str.lower().isin(variants)]["market"].unique()
+     results = []
+     for mkt in markets:
+         record = get_latest_price(df, commodity, mkt)
+diff --git a/backend/app/services/aliases.py b/backend/app/services/aliases.py
+new file mode 100644
+index 0000000..2a289a7
+--- /dev/null
++++ b/backend/app/services/aliases.py
+@@ -0,0 +1,99 @@
++"""
++backend/app/services/aliases.py — market and commodity name aliases
++====================================================================
++The WFP Uganda feed doesn't use the names a farmer (or a judge) types:
++
++  * Kampala's price series is recorded under the market name "Owino".
++  * "Maize" (plain) only exists in a handful of markets (Owino, Lira, Busia,
++    Kabale, Masindi); most others, e.g. Mbarara, record it as "Maize (white)".
++
++Without aliases, "Maize in Kampala" and "Maize in Mbarara" both came back
++empty in USSD, and the forecast API quietly swapped in a different market.
++
++`resolve_series()` is the single lookup used by both routers. The typed
++market is tried first, then its aliases; within a market the FRESHEST variant
++of the crop wins (ties -> typed name). Aliases only fill gaps or replace a
++discontinued series, and every alias hit is reported via `aliased=True`.
++All comparisons are case-insensitive.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Optional
++
++import pandas as pd
++
++# lower-case typed name -> lower-case name as recorded in the WFP feed
++MARKET_ALIASES: dict[str, tuple[str, ...]] = {
++    "kampala": ("owino",),
++}
++
++# lower-case typed name -> other recorded names for the same crop, in order
++COMMODITY_ALIASES: dict[str, tuple[str, ...]] = {
++    "maize": ("maize (white)",),
++    "maize (white)": ("maize",),
++}
++
++
++@dataclass(frozen=True)
++class ResolvedSeries:
++    subset: pd.DataFrame
++    commodity: str          # name as recorded in the data
++    market: str             # name as recorded in the data
++    aliased: bool           # True if an alias (not the typed name) matched
++
++
++def _market_candidates(market: str) -> list[str]:
++    m = market.strip().lower()
++    return [m, *MARKET_ALIASES.get(m, ())]
++
++
++def _commodity_candidates(commodity: str) -> list[str]:
++    c = commodity.strip().lower()
++    return [c, *COMMODITY_ALIASES.get(c, ())]
++
++
++def commodity_variants(commodity: str) -> list[str]:
++    """Lower-case names that count as the same crop (typed name first)."""
++    return _commodity_candidates(commodity)
++
++
++def resolve_series(
++    df: pd.DataFrame, commodity: str, market: str
++) -> Optional[ResolvedSeries]:
++    """
++    Find the price series for commodity x market, using aliases only when the
++    exact names have no data. Returns None if nothing matches (the caller
++    decides whether to fall back, skip, or report "no data").
++    """
++    if df is None or df.empty:
++        return None
++
++    c_col = df["commodity"].str.lower()
++    m_col = df["market"].str.lower()
++    c_cands = _commodity_candidates(commodity)
++
++    # Markets in preference order (typed name first, then aliases). Within the
++    # first market that has ANY data, pick the freshest variant of the crop:
++    # WFP stopped recording plain "Maize" in May 2022 and switched to
++    # "Maize (White)", so "exact name first" would serve 4-year-old prices.
++    # Ties go to the typed name.
++    for mi, m in enumerate(_market_candidates(market)):
++        best = None
++        for ci, c in enumerate(c_cands):
++            subset = df[(c_col == c) & (m_col == m)]
++            if subset.empty:
++                continue
++            last = subset["date"].max()
++            if best is None or last > best[0]:
++                best = (last, ci, subset)
++        if best is not None:
++            _, ci, subset = best
++            return ResolvedSeries(
++                subset=subset.sort_values("date").reset_index(drop=True),
++                commodity=str(subset["commodity"].iloc[0]),
++                market=str(subset["market"].iloc[0]),
++                aliased=(ci > 0 or mi > 0),
++            )
++    return None
+diff --git a/tests/test_aliases_and_fallback.py b/tests/test_aliases_and_fallback.py
+new file mode 100644
+index 0000000..0e5ce8a
+--- /dev/null
++++ b/tests/test_aliases_and_fallback.py
+@@ -0,0 +1,135 @@
++"""
++tests/test_aliases_and_fallback.py — market/commodity aliases, honest
++fallback flagging, and the USSD "Maize in Kampala" flow that used to fail.
++"""
++
++import pandas as pd
++import pytest
++from fastapi.testclient import TestClient
++
++from backend.app.main import app
++from backend.app.routers import forecasts as f
++from backend.app.routers import ussd
++from backend.app.services.aliases import resolve_series
++
++client = TestClient(app)
++
++
++def _df(rows):
++    df = pd.DataFrame(rows, columns=["date", "commodity", "market", "price"])
++    df["date"] = pd.to_datetime(df["date"])
++    return df
++
++
++DF = _df(
++    [("2026-01-01", "Maize", "Owino", 1000), ("2026-02-01", "Maize", "Owino", 1100),
++     ("2026-01-01", "Maize", "Lira", 500),
++     ("2026-01-01", "Maize (White)", "Mbarara", 900), ("2026-02-01", "Maize (White)", "Mbarara", 950),
++     ("2026-01-01", "Beans", "Mbarara", 3000)]
++)
++
++
++# ---- resolve_series ---------------------------------------------------------
++
++def test_exact_match_wins_and_is_not_aliased():
++    r = resolve_series(DF, "Maize", "Lira")
++    assert r.market == "Lira" and r.aliased is False
++
++
++def test_kampala_resolves_to_owino():
++    r = resolve_series(DF, "Maize", "Kampala")
++    assert r.market == "Owino" and r.aliased is True and len(r.subset) == 2
++
++
++def test_maize_resolves_to_white_maize_in_mbarara():
++    r = resolve_series(DF, "maize", "mbarara")
++    assert r.commodity == "Maize (White)" and r.market == "Mbarara"
++
++
++def test_freshest_variant_wins_over_discontinued_exact_name():
++    df = _df([("2022-05-01", "Maize", "Owino", 1249), ("2022-04-01", "Maize", "Owino", 1200),
++              ("2026-03-01", "Maize (White)", "Owino", 2100), ("2026-02-01", "Maize (White)", "Owino", 2000)])
++    r = resolve_series(df, "Maize", "Kampala")
++    assert r.commodity == "Maize (White)" and r.market == "Owino" and r.aliased is True
++
++
++def test_ties_go_to_typed_name():
++    df = _df([("2026-03-01", "Maize", "Lira", 500), ("2026-03-01", "Maize (White)", "Lira", 600)])
++    assert resolve_series(df, "Maize", "Lira").commodity == "Maize"
++
++
++def test_no_match_returns_none_rather_than_another_market():
++    assert resolve_series(DF, "Maize", "Gulu") is None
++    assert resolve_series(DF, "Cassava", "Kampala") is None
++
++
++# ---- forecast router: honest resolution -------------------------------------
++
++def test_resolve_subset_flags_true_fallback():
++    r = f._resolve_subset(DF, "Maize", "Gulu")
++    assert r.kind == "fallback" and "NOT a Gulu forecast" in r.note
++
++
++def test_resolve_subset_alias_kind_has_note():
++    r = f._resolve_subset(DF, "Maize", "Kampala")
++    assert r.kind == "alias" and r.market == "Owino" and r.note
++
++
++def test_resolve_subset_exact_has_no_note():
++    r = f._resolve_subset(DF, "Maize", "Lira")
++    assert r.kind == "exact" and r.note is None
++
++
++def test_forecast_endpoint_mbarara_maize_is_really_mbarara():
++    resp = client.get("/forecasts/Maize", params={"market": "Mbarara", "horizon": 7})
++    assert resp.status_code == 200
++    body = resp.json()
++    assert body["market"] == "Mbarara"
++    assert body["market_fallback"] is False
++    assert body["requested_market"] == "Mbarara"
++
++
++def test_forecast_endpoint_flags_real_fallback():
++    # Sorghum has no Kampala/Owino series in the committed WFP CSV; if the
++    # fallback fires it MUST be flagged, never silent.
++    resp = client.get("/forecasts/Maize", params={"market": "Nowhereville", "horizon": 7})
++    assert resp.status_code == 200
++    body = resp.json()
++    assert body["market_fallback"] is True
++    assert body["requested_market"] == "Nowhereville"
++    assert "NOT a Nowhereville forecast" in body["market_note"]
++
++
++def test_compare_skips_fallback_markets_instead_of_duplicating():
++    resp = client.get(
++        "/forecasts/compare/Maize",
++        params={"markets": "Mbarara,Nowhereville,Elsewhere", "horizon": 7},
++    )
++    assert resp.status_code == 200
++    body = resp.json()
++    assert [r["market"] for r in body["results"]] == ["Mbarara"]
++    assert set(body["skipped_markets"]) == {"Nowhereville", "Elsewhere"}
++
++
++# ---- USSD -------------------------------------------------------------------
++
++def test_ussd_maize_kampala_returns_price():
++    r = client.get("/ussd/simulate", params={"text": "1*Maize*1"})
++    assert r.status_code == 200
++    assert r.text.startswith("END Maize | Kampala")
++    assert "Price: UGX" in r.text
++
++
++def test_ussd_maize_mbarara_returns_price():
++    r = client.get("/ussd/simulate", params={"text": "1*Maize*2"})
++    assert "Price: UGX" in r.text
++
++
++def test_ussd_unknown_market_still_says_no_data():
++    r = client.get("/ussd/simulate", params={"text": "1*Maize*7*Nowhereville"})
++    assert "No data" in r.text
++
++
++def test_ussd_kampala_maize_is_not_a_2022_price():
++    r = client.get("/ussd/simulate", params={"text": "1*Maize*1"})
++    assert "2022" not in r.text
