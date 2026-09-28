@@ -21,7 +21,7 @@ AgriGuard exists to serve four things, and nothing else:
 | FastAPI backend — forecasts, markets, USSD | **Working.** Wired into `main.py`, backed by the committed WFP CSV. |
 | Streamlit dashboard | **Working.** Reads from the backend over HTTP. |
 | Price forecasting (backtested ensemble / XGBoost) | **Working**, with rolling-origin validation and calibrated intervals. |
-| `prices` router (CRUD price observations, MySQL-backed) | **Not wired in.** See Known Issues. |
+| `prices` router (CRUD price observations) | **Working.** Wired into `main.py`. SQLite-backed in dev, same as the rest of the app — no MySQL dependency. |
 | Weather data collection | **Working as a standalone script**, not yet joined into the forecasting features. See `data/README.md`. |
 | `scripts/validate_data.py` | **Working.** Run it directly: `python scripts/validate_data.py --weather-dir data/processed/weather`. |
 | `quant/` package | **Working, fully tested.** Backtesting, prediction intervals (empirical + conformal), and risk metrics — shared discipline with [Vestora](https://github.com/Ve-stora/vestora)'s quant module. `pytest quant/tests/` passes. |
@@ -62,9 +62,8 @@ account).
                       │ HTTP / REST
 ┌────────────────────▼─────────────────────────────────── ┐
 │  FastAPI Backend  (port 8000)                            │
-│  /forecasts/*  /markets/*  /ussd/*                       │
+│  /forecasts/*  /markets/*  /ussd/*  /prices/*              │
 │  /api/v1/predict  /health                                 │
-│  ( /prices/* implemented but not yet wired — see below ) │
 └──────┬─────────────┬──────────────┬───────────────────── ┘
        │              │              │
   XGBoost         Prophet        SQLite (dev)
@@ -138,12 +137,11 @@ AgriGuard/
 │   │   ├── main.py            # FastAPI entry point + router wiring
 │   │   ├── core/config.py     # Settings, reads config/.env — see config/README.md
 │   │   ├── model.py           # ML model loader + inference (XGBoost)       # Input validation
-│   │   ├── schemas.py         # Core Pydantic schemas
 │   │   ├── routers/
 │   │   │   ├── forecasts.py   # /forecasts/* — XGBoost/Prophet forecasts
 │   │   │   ├── markets.py     # /markets/*   — market intelligence
 │   │   │   ├── ussd.py        # /ussd/*      — USSD menu tree + simulator (price conveyance)
-│   │   │   └── prices.py      # /prices/*    — implemented, NOT wired into main.py
+│   │   │   └── prices.py      # /prices/*    — wired into main.py
 │   │   ├── models/, schemas/  # SQLAlchemy ORM + price-domain schemas (used by prices.py)
 │   │   ├── database.py        # SQLAlchemy engine/session (used by prices.py)
 │   │   └── services/          # price_service.py, forecast_service.py
@@ -164,7 +162,7 @@ AgriGuard/
 │   ├── download_wfp_data.py    # fetch WFP Uganda CSV from HDX
 │   ├── fetch_weather.py        # fetch Open-Meteo weather (not yet joined into ML features)
 │   ├── train_models.py         # train XGBoost price forecaster
-│   ├── load_data.py            # load prices into a DB (used by the not-yet-wired prices layer)
+│   ├── load_data.py            # load prices into a DB (used by the prices layer)
 │   └── validate_data.py        # schema/range validation — implemented, run before training
 ├── notebooks/                  # tiered forecasting validation pipeline, run 01→05 — see notebooks/README.md
 ├── tests/                      # test_api.py, test_models.py
@@ -218,10 +216,7 @@ Full interactive docs at `/docs` when the backend is running.
 | GET | `/markets/arbitrage/{commodity}` | Cross-market arbitrage opportunities |
 | GET | `/markets/national-summary` | All commodities, national snapshot |
 | POST | `/ussd/`, `/ussd/simulate` | USSD session handler / local simulator (price conveyance; no Africa's Talking account needed) |
-
-`/prices/*` (paginated CRUD over price observations) is implemented in
-`backend/app/routers/prices.py` but not included in `main.py` — see Known
-Issues before wiring it in.
+| GET/POST/PUT/DELETE | `/prices/*` | Paginated CRUD over price observations |
 
 ## Data Sources
 
@@ -236,13 +231,12 @@ Full schema, provenance, and refresh commands: `data/README.md`.
 Kept here instead of silently fixed, so anyone picking this up knows what's
 real vs. aspirational:
 
-- **`prices` router is implemented but not wired into `main.py`.** It depends
-  on `database.py` / `services/price_service.py` / `models/price.py`, which
-  assume a MySQL-backed deployment this `docker-compose.yml` doesn't provision
-  a service for. `DATABASE_URL` falls back to SQLite for dev, which the
-  `aiomysql` driver in `requirements.txt` doesn't target — reconcile before
-  wiring this router in. It also imports from a nonexistent top-level `app`
-  package (should be `backend.app`) — fix that alongside the DB reconciliation.
+- **`prices` router — no longer an issue.** It's wired into `main.py`. The
+  import from a nonexistent top-level `app` package was fixed to
+  `backend.app`, and the flat `backend/app/schemas.py` file that shadowed the
+  real `schemas/` package was folded into `schemas/__init__.py`. No MySQL
+  dependency either — `DATABASE_URL` falls back to SQLite for dev, same as
+  every other router.
 - **`scripts/validate_data.py` — no longer an issue.** It's fully implemented
   (schema checks, price-bound sanity checks, weather-file validation) and
   passes on the committed datasets. Run it before training:

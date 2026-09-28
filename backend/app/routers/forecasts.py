@@ -1243,6 +1243,7 @@ def get_forecast(
         cached_at, cached_response = cached
         if time.monotonic() - cached_at < _FORECAST_CACHE_TTL_SECONDS:
             return _annotate(cached_response, market_title, res)
+            return cached_response
         _FORECAST_CACHE.pop(cache_key, None)
 
     train = _training_window(subset)
@@ -1274,6 +1275,7 @@ def get_forecast(
     )
     _FORECAST_CACHE[cache_key] = (time.monotonic(), response)
     return _annotate(response, market_title, res)
+    return response
 
 
 @router.get("/compare/{commodity}", response_model=CompareResponse)

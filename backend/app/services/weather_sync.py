@@ -314,6 +314,11 @@ def sync_if_updated(force: bool = False) -> bool:
         "markets_synced": sum(1 for m in per_market.values() if m.get("synced")),
         "markets_total": len(MARKET_COORDS),
         "lookback_days": settings.weather_sync_lookback_days,
+        "history_through": date.today().isoformat() if any_success else prior.get("history_through"),
+        "forecast_through": (
+            (date.today() + timedelta(days=16)).isoformat()
+            if any_success else prior.get("forecast_through")
+        ),
         "per_market": per_market,
     }
     _save_state(state)

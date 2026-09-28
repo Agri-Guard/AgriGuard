@@ -17,6 +17,7 @@ Weather data: Open-Meteo API (free, no API key required)
 import os
 import sys
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -280,6 +281,7 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 st.sidebar.markdown("---")
+st_autorefresh(interval=15 * 60 * 1000, key="dashboard_live_refresh")
 
 base_url = st.sidebar.text_input(
     "🔌 Backend URL",

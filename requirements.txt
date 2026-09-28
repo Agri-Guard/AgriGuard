@@ -27,10 +27,11 @@ scipy==1.17.1
 statsmodels==0.14.6
 arch==7.2.0
 mapie==0.9.2
-pyarrow==18.1.0            # parquet I/O — required by notebooks/ intermediate pipeline outputs
+pyarrow>=22.0.0            # parquet I/O — required by notebooks/ intermediate pipeline outputs
 
 # Dashboard
 streamlit==1.57.0
+streamlit-autorefresh==1.0.1
 plotly==6.7.0
 matplotlib==3.10.9
 seaborn==0.13.2
